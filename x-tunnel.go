@@ -135,6 +135,7 @@ var (
 	certFile         string
 	keyFile          string
 	token            string
+	showVersion      bool
 	cidrs            string
 	targetAllowCIDRs string
 	targetDenyCIDRs  string
@@ -158,6 +159,15 @@ var (
 	socks5Config *SOCKS5Config
 	targetPolicy *TargetPolicy
 	ipStrategy   byte
+
+	serverStreamSeq   uint64
+	udpAssociationSeq uint64
+)
+
+var (
+	buildVersion = "dev"
+	buildCommit  = "unknown"
+	buildDate    = "unknown"
 )
 
 const (
@@ -188,6 +198,7 @@ func init() {
 	flag.StringVar(&certFile, "cert", "", "TLS证书文件路径（默认:自动生成，仅服务端）")
 	flag.StringVar(&keyFile, "key", "", "TLS密钥文件路径（默认:自动生成，仅服务端）")
 	flag.StringVar(&token, "token", "", "身份验证令牌（WebSocket Subprotocol）")
+	flag.BoolVar(&showVersion, "version", false, "输出版本信息并退出")
 	flag.StringVar(&cidrs, "cidr", "0.0.0.0/0,::/0", "允许的来源 IP 范围 (CIDR),多个范围用逗号分隔")
 	flag.StringVar(&targetAllowCIDRs, "allow-target", "", "服务端允许访问的目标 CIDR，多个用逗号分隔（留空表示不限制）")
 	flag.StringVar(&targetDenyCIDRs, "deny-target", "", "服务端拒绝访问的目标 CIDR，多个用逗号分隔")
@@ -196,6 +207,10 @@ func init() {
 	flag.BoolVar(&fallback, "fallback", false, "是否禁用 ECH 并回落到普通 TLS 1.3（仅 wss 模式生效，默认 false）")
 	flag.IntVar(&connectionNum, "n", 3, "每个IP建立的WebSocket连接数量")
 	flag.StringVar(&ips, "ips", "", "服务端解析目标地址的IP偏好 (仅客户端有效)\n 4: 仅IPv4\n 6: 仅IPv6\n 4,6: IPv4优先\n 6,4: IPv6优先")
+}
+
+func versionString() string {
+	return fmt.Sprintf("x-tunnel version=%s commit=%s build=%s", buildVersion, buildCommit, buildDate)
 }
 
 func splitCommaList(raw string) []string {
@@ -299,6 +314,10 @@ func validateListenRule(rule string) error {
 func main() {
 	flag.Parse()
 
+	if showVersion {
+		fmt.Println(versionString())
+		return
+	}
 	if listenAddr == "" {
 		flag.Usage()
 		return
@@ -1843,10 +1862,12 @@ func readSmuxOpenHeader(r io.Reader) (byte, byte, string, error) {
 
 func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream) {
 	defer stream.Close()
+	streamID := atomic.AddUint64(&serverStreamSeq, 1)
 	kind, strategy, target, err := readSmuxOpenHeader(stream)
 	if err != nil {
 		return
 	}
+	log.Printf("[服务端] stream=%d client=%s channel=%d kind=%d target=%s", streamID, shortID(session.clientID), ch.id, kind, target)
 	switch kind {
 	case streamKindHello:
 		clientHello, err := readProtocolHello(stream)
@@ -2548,6 +2569,7 @@ type ProxyConfig struct {
 }
 
 type UDPAssociation struct {
+	id            uint64
 	tcpConn       net.Conn
 	udpListener   *net.UDPConn
 	clientUDPAddr *net.UDPAddr
@@ -2741,11 +2763,13 @@ func handleSOCKS5UDP(c net.Conn, cfgp *ProxyConfig) {
 	}
 
 	assoc := &UDPAssociation{
+		id:          atomic.AddUint64(&udpAssociationSeq, 1),
 		tcpConn:     c,
 		udpListener: ul,
 		pool:        echPool,
 		channelID:   -1,
 	}
+	log.Printf("[客户端] udp_assoc=%d SOCKS5-UDP 关联打开 listener=%s client=%s", assoc.id, actual.String(), clientSourceAddr(c))
 
 	go assoc.loop()
 	b := make([]byte, 1)
@@ -2823,6 +2847,7 @@ func (a *UDPAssociation) send(target string, data []byte) {
 		a.channelID = id
 		stream = s
 		a.mu.Unlock()
+		log.Printf("[客户端] udp_assoc=%d 绑定目标 %s 通道 %d", a.id, target, decision)
 		logClientConnEvent(a.tcpConn, "SOCKS5-UDP", target, decision, true)
 		go func() {
 			for {
@@ -2878,6 +2903,7 @@ func (a *UDPAssociation) Close() {
 		_ = stream.Close()
 	}
 	if chID > 0 && target != "" {
+		log.Printf("[客户端] udp_assoc=%d SOCKS5-UDP 关联关闭 target=%s 通道 %d", a.id, target, chID)
 		logClientConnEvent(a.tcpConn, "SOCKS5-UDP", target, chID, false)
 	}
 	_ = a.udpListener.Close()

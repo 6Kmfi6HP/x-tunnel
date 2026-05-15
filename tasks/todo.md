@@ -85,15 +85,15 @@ Verification:
 
 ### Phase 6: Observability and Operator UX, 14:00-15:30
 
-- [ ] Add structured-ish log prefixes or counters for sessions, channels, streams, reconnects, and UDP associations.
-- [ ] Add a `-version` flag if build metadata can be added simply.
-- [ ] Improve help text and README examples for common modes.
-- [ ] Add a troubleshooting section for token mismatch, ECH failure, DNS failure, and no smux channel available.
+- [x] Add structured-ish log prefixes or counters for sessions, channels, streams, reconnects, and UDP associations.
+- [x] Add a `-version` flag if build metadata can be added simply.
+- [x] Improve help text and README examples for common modes.
+- [x] Add a troubleshooting section for token mismatch, ECH failure, DNS failure, and no smux channel available.
 
 Verification:
 
-- [ ] `go run x-tunnel.go -h`
-- [ ] README/docs examples checked against actual flags.
+- [x] `go run x-tunnel.go -h`
+- [x] README/docs examples checked against actual flags.
 
 ### Phase 7: Refactor Only Where It Pays, 15:30-17:30
 
@@ -200,3 +200,15 @@ Phase 5:
 - Target policy evidence: server logged `TCP 拒绝: 127.0.0.1:19096, reason=目标 127.0.0.1 未命中 allow-target`.
 
 Pending for later phases: observability/operator UX, integration smoke tests, and final review.
+
+Phase 6:
+
+- Added `-version` with build metadata fields `buildVersion`, `buildCommit`, and `buildDate`.
+- Added structured-ish stream logs with server stream IDs and UDP association IDs.
+- Added `docs/troubleshooting.md` for token mismatch, ECH/DNS lookup failures, no smux channel, target policy rejection, and source CIDR rejection.
+- Verified with `go test ./...`: pass.
+- Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
+- Verified `go run x-tunnel.go -version`: `x-tunnel version=dev commit=unknown build=unknown`.
+- Verified `go run x-tunnel.go -h`: pass and includes `-allow-target`, `-deny-target`, and `-version`.
+
+Pending for later phases: refactor, final integration smoke tests, and final review.
