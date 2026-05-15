@@ -134,7 +134,7 @@ Verification:
 - [x] Config file support.
 - mTLS or stronger client authentication.
 - Benchmark suite and load testing.
-- Windows/Linux/macOS release packaging.
+- [x] Windows/Linux/macOS release packaging.
 - [x] CI workflow.
 - [x] Automated local integration test.
 - [x] Release build metadata script.
@@ -283,7 +283,17 @@ Post Phase 8 config:
 - Added `-config` JSON config support.
 - Explicit CLI flags override config file values.
 - Unknown config fields are rejected with `DisallowUnknownFields`.
+- Config rejects trailing JSON values and duplicate `allow_target`/`allow-target` aliases.
 - Documented config usage in `README.md`.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 17.5% of statements`.
 - Verified real config smoke: `config_smoke=pass hash=9ca571ad702f4922cc9f5d5a07bf231c53298b0bfea8a7e7fed8ef0ac23f2b56 tcp_size=77336`.
+
+Post Phase 8 release packaging:
+
+- Added `scripts/release.sh` for Linux, macOS, and Windows builds across amd64/arm64.
+- Release script injects version metadata and writes `SHA256SUMS`.
+- Documented release script in `README.md`.
+- Verified release script with `TARGETS=linux/amd64`, producing `x-tunnel_0.1.0_linux_amd64` and `SHA256SUMS`.
+- Verified with `go test ./...`: pass.
+- Verified with `go test -cover ./...`: pass, `coverage: 18.1% of statements`.

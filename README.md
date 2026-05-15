@@ -26,6 +26,13 @@ VERSION=0.1.0 OUT=./x-tunnel ./scripts/build.sh
 ./x-tunnel -version
 ```
 
+Create cross-platform release artifacts:
+
+```bash
+VERSION=0.1.0 ./scripts/release.sh
+cat dist/SHA256SUMS
+```
+
 ## Local WS Example
 
 Server:
@@ -86,12 +93,16 @@ curl http://127.0.0.1:9090/metrics
 ## Config File
 
 Use `-config` with JSON when command lines get long. Explicit flags override config file values.
+Most keys mirror flag names; `-n` is `connections`, and target filter keys accept either
+`allow-target`/`deny-target` or `allow_target`/`deny_target`.
 
 ```json
 {
   "listen": "socks5://127.0.0.1:11080",
   "forward": "ws://127.0.0.1:18080/tunnel",
   "token": "local-test-token",
+  "allow-target": "10.0.0.0/8",
+  "deny_target": "10.0.9.0/24",
   "connections": 1,
   "metrics": "127.0.0.1:9090"
 }

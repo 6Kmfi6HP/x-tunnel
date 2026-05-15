@@ -220,23 +220,25 @@ func versionString() string {
 }
 
 type FileConfig struct {
-	Listen      *string `json:"listen"`
-	Forward     *string `json:"forward"`
-	IP          *string `json:"ip"`
-	Block       *string `json:"block"`
-	Cert        *string `json:"cert"`
-	Key         *string `json:"key"`
-	Token       *string `json:"token"`
-	Metrics     *string `json:"metrics"`
-	CIDR        *string `json:"cidr"`
-	AllowTarget *string `json:"allow_target"`
-	DenyTarget  *string `json:"deny_target"`
-	DNS         *string `json:"dns"`
-	ECH         *string `json:"ech"`
-	IPS         *string `json:"ips"`
-	Connections *int    `json:"connections"`
-	Insecure    *bool   `json:"insecure"`
-	Fallback    *bool   `json:"fallback"`
+	Listen          *string `json:"listen"`
+	Forward         *string `json:"forward"`
+	IP              *string `json:"ip"`
+	Block           *string `json:"block"`
+	Cert            *string `json:"cert"`
+	Key             *string `json:"key"`
+	Token           *string `json:"token"`
+	Metrics         *string `json:"metrics"`
+	CIDR            *string `json:"cidr"`
+	AllowTarget     *string `json:"allow_target"`
+	DenyTarget      *string `json:"deny_target"`
+	AllowTargetFlag *string `json:"allow-target"`
+	DenyTargetFlag  *string `json:"deny-target"`
+	DNS             *string `json:"dns"`
+	ECH             *string `json:"ech"`
+	IPS             *string `json:"ips"`
+	Connections     *int    `json:"connections"`
+	Insecure        *bool   `json:"insecure"`
+	Fallback        *bool   `json:"fallback"`
 }
 
 func visitedFlags() map[string]bool {
@@ -258,6 +260,21 @@ func loadConfigFile(path string, seen map[string]bool) error {
 	if err := dec.Decode(&fc); err != nil {
 		return err
 	}
+	var extra any
+	if err := dec.Decode(&extra); err != io.EOF {
+		if err != nil {
+			return err
+		}
+		return errors.New("配置文件只能包含一个 JSON 对象")
+	}
+	allowTarget, err := singleStringConfigAlias("allow_target", "allow-target", fc.AllowTarget, fc.AllowTargetFlag)
+	if err != nil {
+		return err
+	}
+	denyTarget, err := singleStringConfigAlias("deny_target", "deny-target", fc.DenyTarget, fc.DenyTargetFlag)
+	if err != nil {
+		return err
+	}
 	applyStringConfig(seen, "l", fc.Listen, &listenAddr)
 	applyStringConfig(seen, "f", fc.Forward, &forwardAddr)
 	applyStringConfig(seen, "ip", fc.IP, &ipAddr)
@@ -267,8 +284,8 @@ func loadConfigFile(path string, seen map[string]bool) error {
 	applyStringConfig(seen, "token", fc.Token, &token)
 	applyStringConfig(seen, "metrics", fc.Metrics, &metricsAddr)
 	applyStringConfig(seen, "cidr", fc.CIDR, &cidrs)
-	applyStringConfig(seen, "allow-target", fc.AllowTarget, &targetAllowCIDRs)
-	applyStringConfig(seen, "deny-target", fc.DenyTarget, &targetDenyCIDRs)
+	applyStringConfig(seen, "allow-target", allowTarget, &targetAllowCIDRs)
+	applyStringConfig(seen, "deny-target", denyTarget, &targetDenyCIDRs)
 	applyStringConfig(seen, "dns", fc.DNS, &dnsServer)
 	applyStringConfig(seen, "ech", fc.ECH, &echDomain)
 	applyStringConfig(seen, "ips", fc.IPS, &ips)
@@ -282,6 +299,16 @@ func loadConfigFile(path string, seen map[string]bool) error {
 		fallback = *fc.Fallback
 	}
 	return nil
+}
+
+func singleStringConfigAlias(primaryName, aliasName string, primary, alias *string) (*string, error) {
+	if primary != nil && alias != nil {
+		return nil, fmt.Errorf("配置字段 %q 和 %q 不能同时设置", primaryName, aliasName)
+	}
+	if primary != nil {
+		return primary, nil
+	}
+	return alias, nil
 }
 
 func applyStringConfig(seen map[string]bool, flagName string, value *string, target *string) {

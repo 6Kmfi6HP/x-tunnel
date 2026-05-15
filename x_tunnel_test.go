@@ -140,11 +140,14 @@ func TestWriteMetrics(t *testing.T) {
 func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 	oldListen, oldForward, oldToken := listenAddr, forwardAddr, token
 	oldMetrics, oldConnectionNum := metricsAddr, connectionNum
+	oldAllow, oldDeny := targetAllowCIDRs, targetDenyCIDRs
 	defer func() {
 		listenAddr, forwardAddr, token = oldListen, oldForward, oldToken
 		metricsAddr, connectionNum = oldMetrics, oldConnectionNum
+		targetAllowCIDRs, targetDenyCIDRs = oldAllow, oldDeny
 	}()
 	listenAddr, forwardAddr, token, metricsAddr = "", "", "", ""
+	targetAllowCIDRs, targetDenyCIDRs = "", ""
 	connectionNum = 3
 
 	path := filepath.Join(t.TempDir(), "config.json")
@@ -153,6 +156,8 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 		"forward": "ws://127.0.0.1:18080/tunnel",
 		"token": "config-token",
 		"metrics": "127.0.0.1:19099",
+		"allow-target": "10.0.0.0/8",
+		"deny_target": "10.0.9.0/24",
 		"connections": 2
 	}`
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
@@ -173,6 +178,12 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 	if metricsAddr != "127.0.0.1:19099" {
 		t.Fatalf("metricsAddr = %q", metricsAddr)
 	}
+	if targetAllowCIDRs != "10.0.0.0/8" {
+		t.Fatalf("targetAllowCIDRs = %q", targetAllowCIDRs)
+	}
+	if targetDenyCIDRs != "10.0.9.0/24" {
+		t.Fatalf("targetDenyCIDRs = %q", targetDenyCIDRs)
+	}
 	if connectionNum != 2 {
 		t.Fatalf("connectionNum = %d, want 2", connectionNum)
 	}
@@ -185,6 +196,26 @@ func TestLoadConfigFileRejectsUnknownFields(t *testing.T) {
 	}
 	if err := loadConfigFile(path, nil); err == nil {
 		t.Fatal("loadConfigFile accepted unknown field")
+	}
+}
+
+func TestLoadConfigFileRejectsTrailingJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"listen":"ws://127.0.0.1:18080/tunnel"} {}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadConfigFile(path, nil); err == nil {
+		t.Fatal("loadConfigFile accepted trailing JSON value")
+	}
+}
+
+func TestLoadConfigFileRejectsDuplicateTargetAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"allow_target":"10.0.0.0/8","allow-target":"10.0.1.0/24"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadConfigFile(path, nil); err == nil {
+		t.Fatal("loadConfigFile accepted duplicate allow target aliases")
 	}
 }
 
