@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"io"
 	"strings"
 	"testing"
@@ -74,6 +75,18 @@ func TestReconnectDelayJitterBounds(t *testing.T) {
 	cfg.ReconnectJitter = 0
 	if got := reconnectDelay(1); got != 2*time.Second {
 		t.Fatalf("reconnectDelay without jitter = %s, want 2s", got)
+	}
+}
+
+func TestSleepWithContextCanceled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if sleepWithContext(ctx, time.Second) {
+		t.Fatal("sleepWithContext returned true for canceled context")
+	}
+	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
+		t.Fatalf("sleepWithContext took too long after cancellation: %s", elapsed)
 	}
 }
 

@@ -21,10 +21,13 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/uuid"
@@ -42,6 +45,7 @@ type GlobalConfig struct {
 	DNSQueryTimeout    time.Duration
 	ECHRetryDelay      time.Duration
 	UDPReadTimeout     time.Duration
+	ShutdownTimeout    time.Duration
 
 	ReadBuf int
 }
@@ -56,6 +60,7 @@ var cfg = GlobalConfig{
 	DNSQueryTimeout:    3 * time.Second,
 	ECHRetryDelay:      2 * time.Second,
 	UDPReadTimeout:     1 * time.Second,
+	ShutdownTimeout:    5 * time.Second,
 	ReadBuf:            64 * 1024,
 }
 
@@ -99,6 +104,25 @@ func randomDuration(limit time.Duration) time.Duration {
 		return 0
 	}
 	return time.Duration(n.Int64())
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		select {
+		case <-ctx.Done():
+			return false
+		default:
+			return true
+		}
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // ======================== 全局参数 ========================
@@ -171,6 +195,8 @@ func main() {
 		flag.Usage()
 		return
 	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
 
 	ipStrategy = parseIPStrategy(ips)
 	if ips != "" {
@@ -214,7 +240,7 @@ func main() {
 		} else {
 			log.Printf("[服务端] 直连模式（未配置SOCKS5代理）")
 		}
-		runWebSocketServer(listenAddr)
+		runWebSocketServer(ctx, listenAddr)
 		return
 	}
 
@@ -280,7 +306,7 @@ func main() {
 	log.Printf("[客户端] 客户端ID: %s", clientID)
 
 	echPool = NewECHPool(forwardAddr, connectionNum, targetIPs, clientID)
-	echPool.Start()
+	echPool.Start(ctx)
 
 	var wg sync.WaitGroup
 	for _, listenerRule := range listeners {
@@ -293,19 +319,19 @@ func main() {
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
-				runTCPListener(r)
+				runTCPListener(ctx, r)
 			}(rule)
 		} else if strings.HasPrefix(rule, "socks5://") {
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
-				runSOCKS5Listener(r)
+				runSOCKS5Listener(ctx, r)
 			}(rule)
 		} else if strings.HasPrefix(rule, "http://") {
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
-				runHTTPListener(r)
+				runHTTPListener(ctx, r)
 			}(rule)
 		} else {
 			log.Printf("[客户端] 忽略未知协议的监听地址: %s", rule)
@@ -1318,7 +1344,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	)
 }
 
-func runWebSocketServer(addr string) {
+func runWebSocketServer(ctx context.Context, addr string) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		log.Fatalf("[服务端] WS 地址无效: %v", err)
@@ -1345,7 +1371,8 @@ func runWebSocketServer(addr string) {
 		upgrader.Subprotocols = []string{token}
 	}
 
-	http.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
 		clientIP, _, err := net.SplitHostPort(r.RemoteAddr)
 		if err != nil {
 			http.Error(w, "错误的请求", http.StatusBadRequest)
@@ -1390,11 +1417,14 @@ func runWebSocketServer(addr string) {
 		go handleWebSocketChannel(ch)
 	})
 
+	server := &http.Server{Addr: u.Host, Handler: mux}
+	go shutdownHTTPServer(ctx, server)
+
 	if u.Scheme == "wss" {
-		server := &http.Server{Addr: u.Host}
 		if certFile != "" && keyFile != "" {
 			server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-			if err := server.ListenAndServeTLS(certFile, keyFile); err != nil {
+			log.Printf("[服务端] WSS 启动 %s%s", u.Host, path)
+			if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("[服务端] WSS 启动失败: %v", err)
 			}
 		} else {
@@ -1404,15 +1434,24 @@ func runWebSocketServer(addr string) {
 			}
 			server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
 			log.Printf("[服务端] WSS 启动 %s%s", u.Host, path)
-			if err := server.ListenAndServeTLS("", ""); err != nil {
+			if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Fatalf("[服务端] WSS 启动失败: %v", err)
 			}
 		}
 	} else {
 		log.Printf("[服务端] WS 启动 %s%s", u.Host, path)
-		if err := http.ListenAndServe(u.Host, nil); err != nil {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			log.Fatalf("[服务端] WS 启动失败: %v", err)
 		}
+	}
+}
+
+func shutdownHTTPServer(ctx context.Context, server *http.Server) {
+	<-ctx.Done()
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("[服务端] HTTP 服务关闭失败: %v", err)
 	}
 }
 
@@ -1671,6 +1710,7 @@ func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
+			defer relay.Close()
 			for {
 				packet, e := readChunk(stream)
 				if e != nil {
@@ -1699,6 +1739,11 @@ func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream
 					default:
 						continue
 					}
+				}
+				select {
+				case <-done:
+					return
+				default:
 				}
 				log.Printf("[服务端] 客户ID:%s UDP 读取失败: %s, err=%v, 通道:%d", shortID(session.clientID), target, e, ch.id)
 				return
@@ -1741,7 +1786,7 @@ func NewECHPool(addr string, n int, ips []string, clientID string) *ECHPool {
 	return p
 }
 
-func (p *ECHPool) Start() {
+func (p *ECHPool) Start(ctx context.Context) {
 	for i := 0; i < len(p.smuxConns); i++ {
 		ip := ""
 		if len(p.targetIPs) > 0 {
@@ -1749,41 +1794,50 @@ func (p *ECHPool) Start() {
 				ip = p.targetIPs[idx]
 			}
 		}
-		go p.dialAndServe(i, ip)
+		go p.dialAndServe(ctx, i, ip)
 	}
 }
 
-func (p *ECHPool) dialAndServe(idx int, ip string) {
+func (p *ECHPool) dialAndServe(ctx context.Context, idx int, ip string) {
 	chID := idx + 1
 	ipLabel := ip
 	if strings.TrimSpace(ipLabel) == "" {
 		ipLabel = "自动解析"
 	}
 	reconnectAttempt := 0
-	sleepBeforeReconnect := func(reason string) {
+	sleepBeforeReconnect := func(reason string) bool {
 		delay := reconnectDelay(reconnectAttempt)
 		log.Printf("[客户端] 通道 %d (IP:%s) %s，%s 后重试 (attempt=%d)", chID, ipLabel, reason, delay, reconnectAttempt+1)
 		reconnectAttempt++
-		time.Sleep(delay)
+		return sleepWithContext(ctx, delay)
 	}
 	for {
+		if ctx.Err() != nil {
+			return
+		}
 		wsConn, err := dialWebSocketWithECH(p.wsServerAddr, 3, ip, p.clientID, chID)
 		if err != nil {
-			sleepBeforeReconnect(fmt.Sprintf("连接失败: %v", err))
+			if !sleepBeforeReconnect(fmt.Sprintf("连接失败: %v", err)) {
+				return
+			}
 			continue
 		}
 		wsNet := newWSNetConn(wsConn)
 		sess, err := smux.Client(wsNet, nil)
 		if err != nil {
 			_ = wsConn.Close()
-			sleepBeforeReconnect(fmt.Sprintf("smux 初始化失败: %v", err))
+			if !sleepBeforeReconnect(fmt.Sprintf("smux 初始化失败: %v", err)) {
+				return
+			}
 			continue
 		}
 		legacyProtocol, err := negotiateClientProtocol(sess, cfg.RTTProbeTimeout)
 		if err != nil {
 			_ = sess.Close()
 			_ = wsConn.Close()
-			sleepBeforeReconnect(fmt.Sprintf("协议协商失败: %v", err))
+			if !sleepBeforeReconnect(fmt.Sprintf("协议协商失败: %v", err)) {
+				return
+			}
 			continue
 		}
 		if legacyProtocol {
@@ -1813,6 +1867,10 @@ func (p *ECHPool) dialAndServe(idx int, ip string) {
 			if probeErr == nil {
 				probeErr = io.EOF
 			}
+		case <-ctx.Done():
+			_ = sess.Close()
+			<-done
+			probeErr = ctx.Err()
 		}
 
 		_ = sess.Close()
@@ -1825,7 +1883,12 @@ func (p *ECHPool) dialAndServe(idx int, ip string) {
 		if probeErr != nil {
 			log.Printf("[客户端] 通道 %d 断开原因: %v", chID, probeErr)
 		}
-		sleepBeforeReconnect("断开")
+		if ctx.Err() != nil {
+			return
+		}
+		if !sleepBeforeReconnect("断开") {
+			return
+		}
 	}
 }
 
@@ -2138,7 +2201,7 @@ func readUDPReply(r io.Reader) (string, []byte, error) {
 
 // ======================== TCP Forwarder ========================
 
-func runTCPListener(rule string) {
+func runTCPListener(ctx context.Context, rule string) {
 	rule = strings.TrimPrefix(rule, "tcp://")
 	parts := strings.Split(rule, "/")
 	if len(parts) != 2 {
@@ -2149,10 +2212,17 @@ func runTCPListener(rule string) {
 	if err != nil {
 		log.Fatalf("[客户端] TCP监听失败: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = l.Close()
+	}()
 	log.Printf("[客户端] TCP转发: %s -> %s", lAddr, tAddr)
 	for {
 		c, err := l.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			continue
 		}
 		go handleLocalTCP(c, tAddr)
@@ -2295,7 +2365,7 @@ func parseAuthAndAddr(full string) (string, string, string, error) {
 	return h, u, p, nil
 }
 
-func runSOCKS5Listener(addr string) {
+func runSOCKS5Listener(ctx context.Context, addr string) {
 	h, u, p, err := parseAuthAndAddr(strings.TrimPrefix(addr, "socks5://"))
 	if err != nil {
 		log.Fatalf("[客户端] SOCKS5地址解析失败: %v", err)
@@ -2304,11 +2374,18 @@ func runSOCKS5Listener(addr string) {
 	if err != nil {
 		log.Fatalf("[客户端] SOCKS5监听失败: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = l.Close()
+	}()
 	log.Printf("[客户端] SOCKS5 代理: %s", h)
 	cfgp := &ProxyConfig{u, p, h}
 	for {
 		c, err := l.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			continue
 		}
 		go handleSOCKS5(c, cfgp)
@@ -2662,17 +2739,24 @@ func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
 	return buf, nil
 }
 
-func runHTTPListener(addr string) {
+func runHTTPListener(ctx context.Context, addr string) {
 	h, u, p, _ := parseAuthAndAddr(strings.TrimPrefix(addr, "http://"))
 	l, err := net.Listen("tcp", h)
 	if err != nil {
 		log.Fatalf("[客户端] HTTP监听失败: %v", err)
 	}
+	go func() {
+		<-ctx.Done()
+		_ = l.Close()
+	}()
 	log.Printf("[客户端] HTTP 代理: %s", h)
 	cfgp := &ProxyConfig{u, p, h}
 	for {
 		c, err := l.Accept()
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
 			continue
 		}
 		go handleHTTP(c, cfgp)

@@ -59,9 +59,9 @@ Verification:
 ### Phase 4: Reliability and Lifecycle, 09:30-12:00
 
 - [x] Replace repeated magic timeout literals with config fields where practical.
-- [ ] Add listener/server context plumbing where it can be done without a large rewrite.
+- [x] Add listener/server context plumbing where it can be done without a large rewrite.
 - [x] Improve reconnect backoff to avoid fixed retry storms.
-- [ ] Ensure goroutines exit on stream/session close in TCP and UDP paths.
+- [x] Ensure goroutines exit on stream/session close in TCP and UDP paths.
 - [x] Add clearer error logs for failed TCP/UDP target dial/open.
 
 Verification:
@@ -165,17 +165,22 @@ Phase 3:
 
 Pending for later phases: reliability/security changes, integration smoke tests, and final review.
 
-Phase 4 partial:
+Phase 4:
 
-- Added config fields for reconnect max delay/jitter, DNS query timeout, ECH retry delay, and UDP read timeout.
+- Added config fields for reconnect max delay/jitter, DNS query timeout, ECH retry delay, UDP read timeout, and shutdown timeout.
 - Replaced practical hard-coded DNS/ECH/UDP time literals with config values.
 - Added exponential reconnect backoff with crypto-random jitter and unit coverage for base delay and jitter bounds.
 - Added clearer logs for failed client stream opens, server TCP/UDP target failures, and UDP response write failures.
+- Added SIGINT/SIGTERM context plumbing for the WebSocket server, client listeners, and channel reconnect loops.
+- Added graceful HTTP server shutdown with `cfg.ShutdownTimeout`.
+- Updated UDP stream lifecycle so the relay is closed as soon as the stream reader exits, unblocking the reply loop without waiting for the read timeout.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 12.3% of statements`.
-- Verified reconnect smoke test by starting the WS server/client, fetching through SOCKS5 and TCP, killing/restarting the WS server, then fetching through both paths again.
-- Reconnect smoke result: `phase4_reconnect=pass`, before/after source/SOCKS/TCP hash all `3db3ab0c56d7ea82789a83e33a7cf7634e95421e2b7c014e82b639d847c0acb8`.
-- Backoff evidence: reconnect log included `断开，1.051380664s 后重试 (attempt=1)`.
-- Negotiation evidence after reconnect: client hello count reached `2`, with `协议协商成功`, `version=1`, and `caps=0xf`.
+- Verified reconnect smoke test by starting the client before the WS server, observing a connection failure/backoff, then starting the server and fetching through SOCKS5 and TCP.
+- Reconnect smoke result: `phase4_reconnect_smoke=pass hash=3db3ab0c56d7ea82789a83e33a7cf7634e95421e2b7c014e82b639d847c0acb8 socks_size=69297 tcp_size=69297`.
+- Backoff evidence: first failure logged `连接失败: dial tcp 127.0.0.1:18082: connect: connection refused，1.044365433s 后重试 (attempt=1)`.
+- Negotiation evidence after reconnect: client and server logs both contained `协议协商成功`, `version=1`, and `caps=0xf`.
+- Verified lifecycle smoke test with a temporary `go build` binary: server/client handled SIGTERM and exited after SOCKS5/TCP hash checks.
+- Lifecycle smoke result: `phase4_lifecycle_smoke=pass hash=2f7fb3bf5a5ef93f224c5a14ee54ed9112f54b07a152a37ac43cb640352aa45e socks_size=71153 tcp_size=71153 graceful_sigterm=pass`.
 
-Remaining Phase 4 work: listener/server context plumbing and a focused goroutine lifecycle review.
+Remaining Phase 4 work: complete.
