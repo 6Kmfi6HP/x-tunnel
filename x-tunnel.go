@@ -668,21 +668,207 @@ func validateListenRule(rule string) error {
 		}
 		return validateListenHostPort(u.Host)
 	case "tcp":
-		raw := strings.TrimPrefix(rule, "tcp://")
-		parts := strings.Split(raw, "/")
-		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return fmt.Errorf("格式必须是 tcp://listen_host:port/target_host:port")
+		listen, target, err := parseTCPForwardRule(rule)
+		if err != nil {
+			return err
 		}
-		if err := validateListenHostPort(parts[0]); err != nil {
+		if err := validateListenHostPort(listen); err != nil {
 			return fmt.Errorf("监听地址无效: %w", err)
 		}
-		if err := validateHostPort(parts[1]); err != nil {
+		if err := validateHostPort(target); err != nil {
 			return fmt.Errorf("目标地址无效: %w", err)
 		}
 		return nil
 	default:
 		return fmt.Errorf("不支持的监听协议 %q", u.Scheme)
 	}
+}
+
+func parseTCPForwardRule(rule string) (string, string, error) {
+	u, err := url.Parse(rule)
+	if err != nil {
+		return "", "", err
+	}
+	if strings.ToLower(u.Scheme) != "tcp" {
+		return "", "", fmt.Errorf("格式必须是 tcp://listen_host:port/target_host:port")
+	}
+	listen := strings.TrimSpace(u.Host)
+	target := strings.TrimSpace(strings.TrimPrefix(u.Path, "/"))
+	if listen == "" || target == "" || strings.Contains(target, "/") {
+		return "", "", fmt.Errorf("格式必须是 tcp://listen_host:port/target_host:port")
+	}
+	return listen, target, nil
+}
+
+type listenerStartupConfig struct {
+	Raw    string
+	Scheme string
+}
+
+type clientStartupConfig struct {
+	ForwardScheme string
+	Fallback      bool
+	AutoFallback  bool
+	UDPBlockPorts map[int]struct{}
+}
+
+type startupConfig struct {
+	Listeners    []listenerStartupConfig
+	IsServer     bool
+	ServerListen string
+	ServerScheme string
+	TargetIPs    []string
+	TargetPolicy *TargetPolicy
+	SOCKS5Config *SOCKS5Config
+	Client       clientStartupConfig
+}
+
+func normalizeURLScheme(raw, scheme string) string {
+	i := strings.Index(raw, ":")
+	if i <= 0 || scheme == "" {
+		return raw
+	}
+	return scheme + raw[i:]
+}
+
+func classifyListeners(raw string) ([]listenerStartupConfig, bool, string, string, error) {
+	listenerStrings := splitCommaList(raw)
+	if len(listenerStrings) == 0 {
+		return nil, false, "", "", fmt.Errorf("至少需要一个监听地址")
+	}
+	listeners := make([]listenerStartupConfig, 0, len(listenerStrings))
+	isServer := false
+	serverListen := ""
+	serverScheme := ""
+	serverListeners := 0
+	for _, l := range listenerStrings {
+		u, err := url.Parse(l)
+		if err != nil {
+			return nil, false, "", "", fmt.Errorf("监听地址无效 %q: %w", l, err)
+		}
+		scheme := strings.ToLower(u.Scheme)
+		normalized := normalizeURLScheme(l, scheme)
+		if err := validateListenRule(normalized); err != nil {
+			return nil, false, "", "", fmt.Errorf("监听地址无效 %q: %w", l, err)
+		}
+		listeners = append(listeners, listenerStartupConfig{Raw: normalized, Scheme: scheme})
+		if scheme == "ws" || scheme == "wss" {
+			serverListeners++
+			isServer = true
+			serverListen = normalized
+			serverScheme = scheme
+		}
+	}
+	if isServer && (serverListeners != 1 || len(listeners) != 1) {
+		return nil, false, "", "", fmt.Errorf("服务端模式只能配置一个 ws:// 或 wss:// 监听地址，不能与客户端监听器混用")
+	}
+	return listeners, isServer, serverListen, serverScheme, nil
+}
+
+func validateServerStartupConfig(forward, allowCIDRs, denyCIDRs, allowHosts, denyHosts string) (*TargetPolicy, *SOCKS5Config, error) {
+	policy, err := parseTargetPolicy(allowCIDRs, denyCIDRs, allowHosts, denyHosts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("目标访问策略无效: %w", err)
+	}
+	if forward == "" {
+		return policy, nil, nil
+	}
+	config, err := parseSOCKS5Addr(forward)
+	if err != nil {
+		return nil, nil, fmt.Errorf("解析SOCKS5代理地址失败: %w", err)
+	}
+	if err := validateHostPort(config.Host); err != nil {
+		return nil, nil, fmt.Errorf("SOCKS5代理地址无效: %w", err)
+	}
+	return policy, config, nil
+}
+
+func validateClientStartupConfig(forward string, connections int, clientCert, clientKey string, insecureMode, fallbackMode bool, blockPortsRaw string) (clientStartupConfig, error) {
+	if forward == "" {
+		return clientStartupConfig{}, fmt.Errorf("客户端模式必须指定服务地址 (-f ws:// 或 -f wss://)")
+	}
+	if connections <= 0 {
+		return clientStartupConfig{}, fmt.Errorf("参数 -n 必须大于 0 (当前: %d)", connections)
+	}
+	forwardURL, err := url.Parse(forward)
+	if err != nil {
+		return clientStartupConfig{}, fmt.Errorf("无效的服务地址: %w", err)
+	}
+	scheme := strings.ToLower(forwardURL.Scheme)
+	if scheme != "wss" && scheme != "ws" {
+		return clientStartupConfig{}, fmt.Errorf("仅支持 ws:// 或 wss:// 协议 (当前: %s)", forwardURL.Scheme)
+	}
+	if forwardURL.Host == "" {
+		return clientStartupConfig{}, fmt.Errorf("服务地址必须包含 host:port")
+	}
+	if (clientCert != "" || clientKey != "") && scheme != "wss" {
+		return clientStartupConfig{}, fmt.Errorf("-client-cert/-client-key 只能用于 wss:// 服务地址")
+	}
+	ports, err := parseUDPBlockPorts(blockPortsRaw)
+	if err != nil {
+		return clientStartupConfig{}, fmt.Errorf("-block 参数无效: %w", err)
+	}
+	fallback := fallbackMode
+	autoFallback := false
+	if scheme == "wss" && insecureMode && !fallback {
+		fallback = true
+		autoFallback = true
+	}
+	return clientStartupConfig{
+		ForwardScheme: scheme,
+		Fallback:      fallback,
+		AutoFallback:  autoFallback,
+		UDPBlockPorts: ports,
+	}, nil
+}
+
+func validateStartupConfig() (*startupConfig, error) {
+	if err := validateToken(token); err != nil {
+		return nil, fmt.Errorf("token 无效: %w", err)
+	}
+	if err := validateGlobalConfig(); err != nil {
+		return nil, fmt.Errorf("全局参数无效: %w", err)
+	}
+	if metricsAddr != "" {
+		if err := validateListenHostPort(metricsAddr); err != nil {
+			return nil, fmt.Errorf("metrics 地址无效: %w", err)
+		}
+	}
+	targetIPs := splitCommaList(ipAddr)
+	for _, targetIP := range targetIPs {
+		if err := validateDialIPOverride(targetIP); err != nil {
+			return nil, fmt.Errorf("-ip 参数无效 %q: %w", targetIP, err)
+		}
+	}
+	listeners, isServer, serverListen, serverScheme, err := classifyListeners(listenAddr)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateMTLSConfig(isServer, serverScheme); err != nil {
+		return nil, fmt.Errorf("mTLS 配置无效: %w", err)
+	}
+	startup := &startupConfig{
+		Listeners:    listeners,
+		IsServer:     isServer,
+		ServerListen: serverListen,
+		ServerScheme: serverScheme,
+		TargetIPs:    targetIPs,
+	}
+	if isServer {
+		policy, socksConfig, err := validateServerStartupConfig(forwardAddr, targetAllowCIDRs, targetDenyCIDRs, targetAllowHosts, targetDenyHosts)
+		if err != nil {
+			return nil, err
+		}
+		startup.TargetPolicy = policy
+		startup.SOCKS5Config = socksConfig
+		return startup, nil
+	}
+	clientConfig, err := validateClientStartupConfig(forwardAddr, connectionNum, clientCertFile, clientKeyFile, insecure, fallback, udpBlockPortsStr)
+	if err != nil {
+		return nil, err
+	}
+	startup.Client = clientConfig
+	return startup, nil
 }
 
 func main() {
@@ -701,16 +887,9 @@ func main() {
 		flag.Usage()
 		return
 	}
-	if err := validateToken(token); err != nil {
-		log.Fatalf("[配置] token 无效: %v", err)
-	}
-	if err := validateGlobalConfig(); err != nil {
-		log.Fatalf("[配置] 全局参数无效: %v", err)
-	}
-	if metricsAddr != "" {
-		if err := validateListenHostPort(metricsAddr); err != nil {
-			log.Fatalf("[配置] metrics 地址无效: %v", err)
-		}
+	startup, err := validateStartupConfig()
+	if err != nil {
+		log.Fatalf("[配置] %v", err)
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -723,102 +902,35 @@ func main() {
 		log.Printf("[客户端] IP 访问策略: %s (code: %d)", ips, ipStrategy)
 	}
 
-	targetIPs := splitCommaList(ipAddr)
-	for _, targetIP := range targetIPs {
-		if err := validateDialIPOverride(targetIP); err != nil {
-			log.Fatalf("[客户端] -ip 参数无效 %q: %v", targetIP, err)
-		}
-	}
-
-	listeners := splitCommaList(listenAddr)
-	if len(listeners) == 0 {
-		log.Fatalf("[配置] 至少需要一个监听地址")
-	}
-	isServer := false
-	serverListeners := 0
-	for _, l := range listeners {
-		if err := validateListenRule(l); err != nil {
-			log.Fatalf("[配置] 监听地址无效 %q: %v", l, err)
-		}
-		if strings.HasPrefix(l, "ws://") || strings.HasPrefix(l, "wss://") {
-			serverListeners++
-			isServer = true
-			listenAddr = l
-		}
-	}
-	if isServer && (serverListeners != 1 || len(listeners) != 1) {
-		log.Fatalf("[配置] 服务端模式只能配置一个 ws:// 或 wss:// 监听地址，不能与客户端监听器混用")
-	}
-	serverScheme := ""
-	if isServer {
-		if u, err := url.Parse(listenAddr); err == nil {
-			serverScheme = strings.ToLower(u.Scheme)
-		}
-	}
-	if err := validateMTLSConfig(isServer, serverScheme); err != nil {
-		log.Fatalf("[配置] mTLS 配置无效: %v", err)
-	}
-
 	// ================= 服务端模式 =================
-	if isServer {
+	if startup.IsServer {
 		if token == "" {
 			log.Printf("[服务端] 警告: 未配置 token，WebSocket 连接不会进行令牌认证")
 		}
-		var err error
-		targetPolicy, err = parseTargetPolicy(targetAllowCIDRs, targetDenyCIDRs, targetAllowHosts, targetDenyHosts)
-		if err != nil {
-			log.Fatalf("[服务端] 目标访问策略无效: %v", err)
-		}
-		if forwardAddr != "" {
-			config, err := parseSOCKS5Addr(forwardAddr)
-			if err != nil {
-				log.Fatalf("[服务端] 解析SOCKS5代理地址失败: %v", err)
-			}
-			if err := validateHostPort(config.Host); err != nil {
-				log.Fatalf("[服务端] SOCKS5代理地址无效: %v", err)
-			}
-			socks5Config = config
-			log.Printf("[服务端] 使用SOCKS5前置代理: %s", config.Host)
-			if config.Username != "" {
+		targetPolicy = startup.TargetPolicy
+		socks5Config = startup.SOCKS5Config
+		if socks5Config != nil {
+			log.Printf("[服务端] 使用SOCKS5前置代理: %s", socks5Config.Host)
+			if socks5Config.Username != "" {
 				log.Printf("[服务端] SOCKS5代理认证已启用")
 			}
 		} else {
 			log.Printf("[服务端] 直连模式（未配置SOCKS5代理）")
 		}
-		runWebSocketServer(ctx, listenAddr)
+		runWebSocketServer(ctx, startup.ServerListen)
 		return
 	}
 
 	// ================= 客户端模式 =================
-	if forwardAddr == "" {
-		log.Fatalf("[客户端] 客户端模式必须指定服务地址 (-f ws:// 或 -f wss://)")
-	}
 	if token == "" {
 		log.Printf("[客户端] 警告: 未配置 token，将尝试连接未启用令牌认证的服务端")
 	}
-	if connectionNum <= 0 {
-		log.Fatalf("[客户端] 参数 -n 必须大于 0 (当前: %d)", connectionNum)
-	}
+	fallback = startup.Client.Fallback
+	udpBlockPorts = startup.Client.UDPBlockPorts
 
-	forwardURL, err := url.Parse(forwardAddr)
-	if err != nil {
-		log.Fatalf("[客户端] 无效的服务地址: %v", err)
-	}
-	scheme := strings.ToLower(forwardURL.Scheme)
-	if scheme != "wss" && scheme != "ws" {
-		log.Fatalf("[客户端] 仅支持 ws:// 或 wss:// 协议 (当前: %s)", forwardURL.Scheme)
-	}
-	if forwardURL.Host == "" {
-		log.Fatalf("[客户端] 服务地址必须包含 host:port")
-	}
-	if (clientCertFile != "" || clientKeyFile != "") && scheme != "wss" {
-		log.Fatalf("[客户端] -client-cert/-client-key 只能用于 wss:// 服务地址")
-	}
-
-	if scheme == "wss" {
+	if startup.Client.ForwardScheme == "wss" {
 		if insecure {
-			if !fallback {
-				fallback = true
+			if startup.Client.AutoFallback {
 				log.Printf("[客户端] wss 模式且启用不校验证书（insecure）：已自动禁用 ECH（fallback）")
 			} else {
 				log.Printf("[客户端] wss 模式且启用不校验证书（insecure）")
@@ -840,44 +952,35 @@ func main() {
 		}
 	}
 
-	var blockErr error
-	udpBlockPorts, blockErr = parseUDPBlockPorts(udpBlockPortsStr)
-	if blockErr != nil {
-		log.Fatalf("[客户端] -block 参数无效: %v", blockErr)
-	}
-
 	clientID = uuid.NewString()
 	log.Printf("[客户端] 客户端ID: %s", clientID)
 
-	echPool = NewECHPool(forwardAddr, connectionNum, targetIPs, clientID)
+	echPool = NewECHPool(forwardAddr, connectionNum, startup.TargetIPs, clientID)
 	echPool.Start(ctx)
 
 	var wg sync.WaitGroup
-	for _, listenerRule := range listeners {
-		rule := strings.TrimSpace(listenerRule)
-		if rule == "" {
-			continue
-		}
-
-		if strings.HasPrefix(rule, "tcp://") {
+	for _, listenerRule := range startup.Listeners {
+		rule := listenerRule.Raw
+		switch listenerRule.Scheme {
+		case "tcp":
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
 				runTCPListener(ctx, r)
 			}(rule)
-		} else if strings.HasPrefix(rule, "socks5://") {
+		case "socks5":
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
 				runSOCKS5Listener(ctx, r)
 			}(rule)
-		} else if strings.HasPrefix(rule, "http://") {
+		case "http":
 			wg.Add(1)
 			go func(r string) {
 				defer wg.Done()
 				runHTTPListener(ctx, r)
 			}(rule)
-		} else {
+		default:
 			log.Printf("[客户端] 忽略未知协议的监听地址: %s", rule)
 		}
 	}
@@ -2968,12 +3071,10 @@ func (p *ECHPool) openUDPStream(target string) (*smux.Stream, int, int, error) {
 // ======================== TCP Forwarder ========================
 
 func runTCPListener(ctx context.Context, rule string) {
-	rule = strings.TrimPrefix(rule, "tcp://")
-	parts := strings.Split(rule, "/")
-	if len(parts) != 2 {
-		return
+	lAddr, tAddr, err := parseTCPForwardRule(rule)
+	if err != nil {
+		log.Fatalf("[客户端] TCP转发地址解析失败: %v", err)
 	}
-	lAddr, tAddr := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
 	l, err := net.Listen("tcp", lAddr)
 	if err != nil {
 		log.Fatalf("[客户端] TCP监听失败: %v", err)

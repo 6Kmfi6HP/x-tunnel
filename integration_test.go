@@ -282,6 +282,40 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_client_session_rejections_total 1")
 }
 
+func TestIntegrationSourceCIDRRejectionMetrics(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	binPath := filepath.Join(t.TempDir(), "x-tunnel")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binPath, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+
+	wsAddr := freeTCPAddr(t)
+	metricsAddr := freeTCPAddr(t)
+	serverLog := filepath.Join(t.TempDir(), "source-cidr-server.log")
+
+	server := startXTunnel(t, ctx, binPath, serverLog,
+		"-l", "ws://"+wsAddr+"/tunnel",
+		"-token", "source-cidr-token",
+		"-cidr", "192.0.2.0/24",
+		"-metrics", metricsAddr,
+	)
+	defer stopProcess(server)
+	waitTCP(t, ctx, wsAddr)
+	waitTCP(t, ctx, metricsAddr)
+
+	if got := fetchHTTPStatus(t, "http://"+wsAddr+"/tunnel"); got != http.StatusForbidden {
+		t.Fatalf("source CIDR rejection status = %d, want %d", got, http.StatusForbidden)
+	}
+	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_source_rejections_total 1")
+}
+
 func TestIntegrationTCPStatusRejectsBlockedTarget(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping integration test in short mode")
@@ -425,6 +459,18 @@ func fetchHTTP(t *testing.T, rawURL string) string {
 	}
 	defer resp.Body.Close()
 	return readOKBody(t, resp)
+}
+
+func fetchHTTPStatus(t *testing.T, rawURL string) int {
+	t.Helper()
+	client := &http.Client{Timeout: integrationIOTimeout}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		t.Fatalf("GET %s: %v", rawURL, err)
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return resp.StatusCode
 }
 
 func fetchViaHTTPProxy(t *testing.T, proxyAddr, rawURL string) string {

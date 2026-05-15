@@ -642,11 +642,13 @@ func TestValidateToken(t *testing.T) {
 func TestValidateListenRule(t *testing.T) {
 	valid := []string{
 		"ws://127.0.0.1:18080/tunnel",
+		"WS://127.0.0.1:18080/tunnel",
 		"wss://:18443/tunnel",
 		"socks5://user:pass@127.0.0.1:11080",
 		"http://user:pass@127.0.0.1:18080",
 		"http://127.0.0.1:18080",
 		"tcp://127.0.0.1:12000/127.0.0.1:19090",
+		"TCP://127.0.0.1:12000/127.0.0.1:19090",
 	}
 	for _, rule := range valid {
 		if err := validateListenRule(rule); err != nil {
@@ -669,6 +671,209 @@ func TestValidateListenRule(t *testing.T) {
 		if err := validateListenRule(rule); err == nil {
 			t.Fatalf("validateListenRule(%q) accepted invalid rule", rule)
 		}
+	}
+}
+
+func TestParseTCPForwardRule(t *testing.T) {
+	listen, target, err := parseTCPForwardRule("tcp://127.0.0.1:12000/127.0.0.1:19090")
+	if err != nil {
+		t.Fatalf("parseTCPForwardRule returned error: %v", err)
+	}
+	if listen != "127.0.0.1:12000" || target != "127.0.0.1:19090" {
+		t.Fatalf("parseTCPForwardRule = listen %q target %q", listen, target)
+	}
+	for _, rule := range []string{
+		"udp://127.0.0.1:12000/127.0.0.1:19090",
+		"tcp://127.0.0.1:12000",
+		"tcp://127.0.0.1:12000/",
+		"tcp://127.0.0.1:12000/127.0.0.1:19090/extra",
+	} {
+		if _, _, err := parseTCPForwardRule(rule); err == nil {
+			t.Fatalf("parseTCPForwardRule(%q) accepted invalid rule", rule)
+		}
+	}
+}
+
+func TestClassifyListeners(t *testing.T) {
+	listeners, isServer, serverListen, serverScheme, err := classifyListeners("TCP://127.0.0.1:12000/127.0.0.1:19090,SOCKS5://127.0.0.1:11080")
+	if err != nil {
+		t.Fatalf("classifyListeners client returned error: %v", err)
+	}
+	if isServer || serverListen != "" || serverScheme != "" {
+		t.Fatalf("classifyListeners client server fields = %v %q %q", isServer, serverListen, serverScheme)
+	}
+	if len(listeners) != 2 || listeners[0].Scheme != "tcp" || !strings.HasPrefix(listeners[0].Raw, "tcp://") || listeners[1].Scheme != "socks5" {
+		t.Fatalf("classifyListeners client listeners = %#v", listeners)
+	}
+
+	listeners, isServer, serverListen, serverScheme, err = classifyListeners("WSS://0.0.0.0:443/tunnel")
+	if err != nil {
+		t.Fatalf("classifyListeners server returned error: %v", err)
+	}
+	if !isServer || serverScheme != "wss" || serverListen != "wss://0.0.0.0:443/tunnel" || len(listeners) != 1 {
+		t.Fatalf("classifyListeners server = listeners %#v isServer %v listen %q scheme %q", listeners, isServer, serverListen, serverScheme)
+	}
+
+	if _, _, _, _, err := classifyListeners("ws://127.0.0.1:18080/tunnel,socks5://127.0.0.1:11080"); err == nil {
+		t.Fatal("classifyListeners accepted mixed server/client listeners")
+	}
+	if _, _, _, _, err := classifyListeners("ws://127.0.0.1:18080/tunnel,wss://127.0.0.1:18443/tunnel"); err == nil {
+		t.Fatal("classifyListeners accepted multiple server listeners")
+	}
+	if _, _, _, _, err := classifyListeners(""); err == nil {
+		t.Fatal("classifyListeners accepted empty listener list")
+	}
+}
+
+func TestValidateClientStartupConfig(t *testing.T) {
+	cfg, err := validateClientStartupConfig("wss://example.com/tunnel", 2, "client.pem", "client-key.pem", true, false, "443,8443")
+	if err != nil {
+		t.Fatalf("validateClientStartupConfig returned error: %v", err)
+	}
+	if cfg.ForwardScheme != "wss" || !cfg.Fallback || !cfg.AutoFallback {
+		t.Fatalf("validateClientStartupConfig fallback fields = %#v", cfg)
+	}
+	if _, ok := cfg.UDPBlockPorts[8443]; !ok {
+		t.Fatalf("validateClientStartupConfig ports = %#v", cfg.UDPBlockPorts)
+	}
+
+	invalid := []struct {
+		name    string
+		forward string
+		n       int
+		cert    string
+		key     string
+		block   string
+	}{
+		{name: "missing forward", forward: "", n: 1},
+		{name: "bad scheme", forward: "http://example.com/tunnel", n: 1},
+		{name: "missing host", forward: "ws:///tunnel", n: 1},
+		{name: "zero connections", forward: "ws://example.com/tunnel", n: 0},
+		{name: "client cert on ws", forward: "ws://example.com/tunnel", n: 1, cert: "client.pem", key: "client-key.pem"},
+		{name: "bad block", forward: "ws://example.com/tunnel", n: 1, block: "443abc"},
+	}
+	for _, tt := range invalid {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := validateClientStartupConfig(tt.forward, tt.n, tt.cert, tt.key, false, false, tt.block); err == nil {
+				t.Fatal("validateClientStartupConfig accepted invalid input")
+			}
+		})
+	}
+}
+
+func validTestGlobalConfig() GlobalConfig {
+	return GlobalConfig{
+		DialTimeout:        time.Second,
+		WSHandshakeTimeout: time.Second,
+		ReconnectDelay:     time.Second,
+		ReconnectMaxDelay:  time.Second,
+		ReconnectJitter:    0,
+		RTTProbeTimeout:    time.Second,
+		DNSQueryTimeout:    time.Second,
+		ECHRetryDelay:      time.Second,
+		UDPReadTimeout:     time.Second,
+		ShutdownTimeout:    time.Second,
+		ReadBuf:            64 * 1024,
+	}
+}
+
+func withValidStartupGlobals(t *testing.T) func() {
+	t.Helper()
+	oldCfg := cfg
+	oldListen, oldForward, oldIP, oldBlock := listenAddr, forwardAddr, ipAddr, udpBlockPortsStr
+	oldCert, oldKey := certFile, keyFile
+	oldClientCA, oldClientCert, oldClientKey := clientCAFile, clientCertFile, clientKeyFile
+	oldToken, oldMetrics := token, metricsAddr
+	oldAllow, oldDeny := targetAllowCIDRs, targetDenyCIDRs
+	oldAllowHosts, oldDenyHosts := targetAllowHosts, targetDenyHosts
+	oldMaxClients, oldMaxStreams := maxClientSessions, maxStreamsPerClient
+	oldConnections, oldInsecure, oldFallback := connectionNum, insecure, fallback
+
+	cfg = validTestGlobalConfig()
+	listenAddr = "socks5://127.0.0.1:11080"
+	forwardAddr = "ws://127.0.0.1:18080/tunnel"
+	ipAddr, udpBlockPortsStr = "", ""
+	certFile, keyFile = "", ""
+	clientCAFile, clientCertFile, clientKeyFile = "", "", ""
+	token, metricsAddr = "local-test-token", ""
+	targetAllowCIDRs, targetDenyCIDRs = "", ""
+	targetAllowHosts, targetDenyHosts = "", ""
+	maxClientSessions, maxStreamsPerClient = 0, 0
+	connectionNum, insecure, fallback = 1, false, false
+
+	return func() {
+		cfg = oldCfg
+		listenAddr, forwardAddr, ipAddr, udpBlockPortsStr = oldListen, oldForward, oldIP, oldBlock
+		certFile, keyFile = oldCert, oldKey
+		clientCAFile, clientCertFile, clientKeyFile = oldClientCA, oldClientCert, oldClientKey
+		token, metricsAddr = oldToken, oldMetrics
+		targetAllowCIDRs, targetDenyCIDRs = oldAllow, oldDeny
+		targetAllowHosts, targetDenyHosts = oldAllowHosts, oldDenyHosts
+		maxClientSessions, maxStreamsPerClient = oldMaxClients, oldMaxStreams
+		connectionNum, insecure, fallback = oldConnections, oldInsecure, oldFallback
+	}
+}
+
+func TestValidateServerStartupConfig(t *testing.T) {
+	policy, socksConfig, err := validateServerStartupConfig("socks5://user:pass@127.0.0.1:1080", "10.0.0.0/8", "", "api.example.com", "")
+	if err != nil {
+		t.Fatalf("validateServerStartupConfig returned error: %v", err)
+	}
+	if policy == nil || socksConfig == nil || socksConfig.Host != "127.0.0.1:1080" || socksConfig.Username != "user" {
+		t.Fatalf("validateServerStartupConfig policy=%#v socks=%#v", policy, socksConfig)
+	}
+	if _, _, err := validateServerStartupConfig("socks5://127.0.0.1", "", "", "", ""); err == nil {
+		t.Fatal("validateServerStartupConfig accepted SOCKS5 proxy without port")
+	}
+}
+
+func TestValidateStartupConfigValidModes(t *testing.T) {
+	restore := withValidStartupGlobals(t)
+	defer restore()
+
+	startup, err := validateStartupConfig()
+	if err != nil {
+		t.Fatalf("validateStartupConfig client returned error: %v", err)
+	}
+	if startup.IsServer || startup.Client.ForwardScheme != "ws" || len(startup.Listeners) != 1 {
+		t.Fatalf("validateStartupConfig client = %#v", startup)
+	}
+
+	listenAddr = "ws://127.0.0.1:18080/tunnel"
+	forwardAddr = ""
+	targetAllowCIDRs = "127.0.0.0/8"
+	startup, err = validateStartupConfig()
+	if err != nil {
+		t.Fatalf("validateStartupConfig server returned error: %v", err)
+	}
+	if !startup.IsServer || startup.ServerScheme != "ws" || startup.TargetPolicy == nil {
+		t.Fatalf("validateStartupConfig server = %#v", startup)
+	}
+}
+
+func TestValidateStartupConfigRejectsCommonErrors(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func()
+	}{
+		{name: "bad metrics", setup: func() { metricsAddr = "127.0.0.1" }},
+		{name: "bad ip override", setup: func() { ipAddr = "example.com" }},
+		{name: "missing client forward", setup: func() { forwardAddr = "" }},
+		{name: "bad forward scheme", setup: func() { forwardAddr = "http://127.0.0.1:18080/tunnel" }},
+		{name: "client cert on ws", setup: func() {
+			clientCertFile = "client.pem"
+			clientKeyFile = "client-key.pem"
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			restore := withValidStartupGlobals(t)
+			defer restore()
+			tt.setup()
+			if _, err := validateStartupConfig(); err == nil {
+				t.Fatal("validateStartupConfig accepted invalid startup config")
+			}
+		})
 	}
 }
 
@@ -1400,23 +1605,8 @@ func TestExampleConfigFilesLoad(t *testing.T) {
 			if listenAddr == "" {
 				t.Fatalf("example %s did not set listen", path)
 			}
-			for _, rule := range splitCommaList(listenAddr) {
-				if err := validateListenRule(rule); err != nil {
-					t.Fatalf("validateListenRule(%q): %v", rule, err)
-				}
-			}
-			if err := validateGlobalConfig(); err != nil {
-				t.Fatalf("validateGlobalConfig(%s): %v", path, err)
-			}
-			if metricsAddr != "" {
-				if err := validateListenHostPort(metricsAddr); err != nil {
-					t.Fatalf("validate metrics address %q: %v", metricsAddr, err)
-				}
-			}
-			if token != "" {
-				if err := validateToken(token); err != nil {
-					t.Fatalf("validateToken(%s): %v", path, err)
-				}
+			if _, err := validateStartupConfig(); err != nil {
+				t.Fatalf("validateStartupConfig(%s): %v", path, err)
 			}
 		})
 	}

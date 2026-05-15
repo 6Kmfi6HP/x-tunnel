@@ -550,3 +550,28 @@ Verification:
 - `go run . -l http://user@127.0.0.1:12346 -f ws://127.0.0.1:1/tunnel`: exits non-zero during listen-rule validation with `监听地址无效`.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 30.7% of statements`.
+
+Post Phase 8 source CIDR metrics integration:
+
+- [x] Add real process integration coverage for source CIDR WebSocket rejection.
+- [x] Verify rejected requests return HTTP 403 and increment `x_tunnel_server_source_rejections_total`.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `go test -run TestIntegrationSourceCIDRRejectionMetrics -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 30.4% of statements`.
+
+Post Phase 8 startup validation extraction:
+
+- [x] Extract listener classification and client/server startup validation out of `main`.
+- [x] Preserve existing server/client behavior while failing invalid config before pool/listener startup.
+- [x] Add unit coverage for TCP forward parsing, listener classification, and client startup config validation.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `go test -run 'Test(ParseTCPForwardRule|ClassifyListeners|ValidateClientStartupConfig|ValidateServerStartupConfig|ValidateStartupConfig|ValidateListenRule|IntegrationSourceCIDRRejectionMetrics)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 34.0% of statements`.
