@@ -1758,7 +1758,7 @@ func buildDNSQuery(domain string, qtype uint16) ([]byte, error) {
 }
 
 func normalizeDNSName(domain string) string {
-	return strings.TrimSuffix(strings.TrimSpace(domain), ".")
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
 }
 
 func validateDNSName(domain string) error {
@@ -1774,6 +1774,15 @@ func validateDNSName(domain string) error {
 		}
 		if len(label) > 63 {
 			return fmt.Errorf("DNS 标签 %q 过长", label)
+		}
+		if label[0] == '-' || label[len(label)-1] == '-' {
+			return fmt.Errorf("DNS 标签 %q 不能以连字符开头或结尾", label)
+		}
+		for _, r := range label {
+			if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' {
+				continue
+			}
+			return fmt.Errorf("DNS 标签 %q 包含非法字符", label)
 		}
 	}
 	return nil

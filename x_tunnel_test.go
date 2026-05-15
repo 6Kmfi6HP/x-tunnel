@@ -277,7 +277,7 @@ func TestValidateGlobalConfig(t *testing.T) {
 }
 
 func TestBuildDNSQueryValidatesDomain(t *testing.T) {
-	query, err := buildDNSQuery("example.com.", typeHTTPS)
+	query, err := buildDNSQuery("Example.COM.", typeHTTPS)
 	if err != nil {
 		t.Fatalf("buildDNSQuery returned error: %v", err)
 	}
@@ -295,6 +295,11 @@ func TestBuildDNSQueryValidatesDomain(t *testing.T) {
 		"",
 		".",
 		"example..com",
+		"bad host.example",
+		"-bad.example",
+		"bad-.example",
+		"bad_underscore.example",
+		"例.example",
 		strings.Repeat("a", 64) + ".example.com",
 		strings.Repeat("a", 250) + ".com",
 	}
