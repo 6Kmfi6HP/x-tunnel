@@ -242,7 +242,7 @@ Phase 8:
 Remaining risks/backlog:
 
 - Add CI so `go test ./...` runs automatically on push/PR.
-- Expand automated integration tests to cover WSS/fallback modes.
+- [x] Expand automated integration tests to cover WSS/fallback modes.
 - Add release build metadata defaults in a documented build script.
 - Consider mTLS or signed client auth beyond bearer-token subprotocol auth.
 
@@ -253,6 +253,8 @@ Post Phase 8 backlog:
 - CI steps: module download, `go test ./...`, `go test -cover ./...`, and `go build -o x-tunnel .`.
 - Added `integration_test.go` to automate the local tunnel matrix inside `go test ./...`.
 - Integration test builds a temporary binary and covers WS server, metrics endpoint, SOCKS5 TCP, SOCKS5 UDP relay, TCP forward, HTTP proxy GET, HTTP CONNECT, and wrong-token rejection.
+- Added WSS fallback integration coverage with auto self-signed server cert and client `-insecure`.
+- Verified WSS fallback integration with `go test ./...`: pass.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 16.3% of statements`.
 - Added `integration_test.go`, which builds a temporary x-tunnel binary, starts a real local WS server/client pair, and verifies TCP forward plus HTTP proxy traffic against an `httptest` server.

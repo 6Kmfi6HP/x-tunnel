@@ -93,6 +93,57 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	waitLogContains(t, ctx, serverLog, "Token 认证失败")
 }
 
+func TestIntegrationLocalWSSFallback(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping integration test in short mode")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	const body = "x-tunnel wss fallback payload\n"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer origin.Close()
+	targetAddr := strings.TrimPrefix(origin.URL, "http://")
+
+	binPath := filepath.Join(t.TempDir(), "x-tunnel")
+	build := exec.CommandContext(ctx, "go", "build", "-o", binPath, ".")
+	if out, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("go build failed: %v\n%s", err, out)
+	}
+
+	wssAddr := freeTCPAddr(t)
+	tcpAddr := freeTCPAddr(t)
+	serverLog := filepath.Join(t.TempDir(), "wss-server.log")
+	clientLog := filepath.Join(t.TempDir(), "wss-client.log")
+
+	server := startXTunnel(t, ctx, binPath, serverLog,
+		"-l", "wss://"+wssAddr+"/tunnel",
+		"-token", "wss-token",
+		"-cidr", "127.0.0.1/32",
+		"-allow-target", "127.0.0.0/8",
+	)
+	defer stopProcess(server)
+	waitTCP(t, ctx, wssAddr)
+
+	client := startXTunnel(t, ctx, binPath, clientLog,
+		"-l", "tcp://"+tcpAddr+"/"+targetAddr,
+		"-f", "wss://"+wssAddr+"/tunnel",
+		"-token", "wss-token",
+		"-n", "1",
+		"-insecure",
+	)
+	defer stopProcess(client)
+	waitTCP(t, ctx, tcpAddr)
+	waitLogContains(t, ctx, clientLog, "fallback 模式已启用")
+	waitLogContains(t, ctx, clientLog, "协议协商成功")
+	waitLogContains(t, ctx, serverLog, "协议协商成功")
+
+	assertBody(t, "wss tcp forward", fetchHTTP(t, "http://"+tcpAddr+"/payload"), body)
+}
+
 func startXTunnel(t *testing.T, ctx context.Context, binPath, logPath string, args ...string) *exec.Cmd {
 	t.Helper()
 	logFile, err := os.Create(logPath)
