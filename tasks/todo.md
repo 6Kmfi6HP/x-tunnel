@@ -801,3 +801,17 @@ Verification:
 - `go test -run 'Test(Socks5Handshake|IntegrationUpstreamSOCKS5Auth)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 41.4% of statements`.
+
+Post Phase 8 SOCKS5 auth credential length validation:
+
+- [x] Reject upstream SOCKS5 usernames/passwords over 255 bytes before encoding RFC1929 auth.
+- [x] Reject local SOCKS5 listener auth over 255 bytes during listener validation.
+- [x] Keep HTTP proxy auth parsing behavior unchanged.
+- [x] Add focused unit coverage and run full verification before commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(ValidateListenRule|ParseSOCKS5Addr|Socks5UserPassAuthSrv|Socks5Handshake)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 41.7% of statements`.

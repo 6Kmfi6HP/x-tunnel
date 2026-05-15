@@ -671,6 +671,11 @@ func validateListenRule(rule string) error {
 			if username == "" || !ok || password == "" {
 				return fmt.Errorf("认证格式必须是 user:pass@host:port")
 			}
+			if scheme == "socks5" {
+				if err := validateSOCKS5AuthLength(username, password); err != nil {
+					return err
+				}
+			}
 		}
 		return validateListenHostPort(u.Host)
 	case "tcp":
@@ -1397,10 +1402,20 @@ func parseSOCKS5Addr(addr string) (*SOCKS5Config, error) {
 		if config.Username == "" || config.Password == "" {
 			return nil, fmt.Errorf("用户名和密码不能为空")
 		}
+		if err := validateSOCKS5AuthLength(config.Username, config.Password); err != nil {
+			return nil, err
+		}
 	} else {
 		config.Host = strings.TrimSpace(addr)
 	}
 	return config, nil
+}
+
+func validateSOCKS5AuthLength(username, password string) error {
+	if len(username) > 255 || len(password) > 255 {
+		return fmt.Errorf("SOCKS5 用户名和密码长度必须不超过 255 字节")
+	}
+	return nil
 }
 
 func dialViaSocks5(network, addr string) (net.Conn, error) {
@@ -1462,6 +1477,9 @@ func socks5Handshake(conn net.Conn, config *SOCKS5Config) error {
 }
 
 func socks5UserPassAuthSrv(conn net.Conn, username, password string) error {
+	if err := validateSOCKS5AuthLength(username, password); err != nil {
+		return err
+	}
 	authReq := make([]byte, 3+len(username)+len(password))
 	authReq[0], authReq[1] = 0x01, byte(len(username))
 	copy(authReq[2:], username)

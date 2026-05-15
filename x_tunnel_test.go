@@ -724,12 +724,14 @@ func TestValidateToken(t *testing.T) {
 }
 
 func TestValidateListenRule(t *testing.T) {
+	longCredential := strings.Repeat("u", 256)
 	valid := []string{
 		"ws://127.0.0.1:18080/tunnel",
 		"WS://127.0.0.1:18080/tunnel",
 		"wss://:18443/tunnel",
 		"socks5://user:pass@127.0.0.1:11080",
 		"http://user:pass@127.0.0.1:18080",
+		"http://" + longCredential + ":pass@127.0.0.1:18080",
 		"http://127.0.0.1:18080",
 		"tcp://127.0.0.1:12000/127.0.0.1:19090",
 		"TCP://127.0.0.1:12000/127.0.0.1:19090",
@@ -746,6 +748,7 @@ func TestValidateListenRule(t *testing.T) {
 		"ws://127.0.0.1",
 		"socks5://127.0.0.1:70000",
 		"socks5://user@127.0.0.1:11080",
+		"socks5://" + longCredential + ":pass@127.0.0.1:11080",
 		"http://user:@127.0.0.1:18080",
 		"http://:pass@127.0.0.1:18080",
 		"tcp://127.0.0.1:12000",
@@ -1181,6 +1184,18 @@ func TestParseSOCKS5AddrRejectsIncompleteAuth(t *testing.T) {
 	}
 }
 
+func TestParseSOCKS5AddrRejectsOversizedAuth(t *testing.T) {
+	longCredential := strings.Repeat("u", 256)
+	for _, in := range []string{
+		"socks5://" + longCredential + ":pass@127.0.0.1:1080",
+		"socks5://user:" + longCredential + "@127.0.0.1:1080",
+	} {
+		if _, err := parseSOCKS5Addr(in); err == nil {
+			t.Fatalf("parseSOCKS5Addr(%q) accepted oversized auth", in)
+		}
+	}
+}
+
 func TestSocks5HandshakeWithAuthOffersOnlyUserPass(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -1282,6 +1297,17 @@ func readSOCKS5AuthRequest(t *testing.T, r io.Reader) string {
 		t.Fatalf("read SOCKS5 password: %v", err)
 	}
 	return string(username) + ":" + string(password)
+}
+
+func TestSocks5UserPassAuthSrvRejectsOversizedCredentials(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = client.SetDeadline(time.Now().Add(100 * time.Millisecond))
+
+	if err := socks5UserPassAuthSrv(client, strings.Repeat("u", 256), "pass"); err == nil {
+		t.Fatal("socks5UserPassAuthSrv accepted oversized username")
+	}
 }
 
 func TestSocks5ConnectRejectsTruncatedBoundAddress(t *testing.T) {
