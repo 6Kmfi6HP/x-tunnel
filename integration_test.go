@@ -44,6 +44,7 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	socksAddr := freeTCPAddr(t)
 	tcpAddr := freeTCPAddr(t)
 	httpProxyAddr := freeTCPAddr(t)
+	metricsAddr := freeTCPAddr(t)
 
 	serverLog := filepath.Join(t.TempDir(), "server.log")
 	clientLog := filepath.Join(t.TempDir(), "client.log")
@@ -54,9 +55,11 @@ func TestLocalTunnelIntegration(t *testing.T) {
 		"-token", "integration-token",
 		"-cidr", "127.0.0.1/32",
 		"-allow-target", "127.0.0.0/8",
+		"-metrics", metricsAddr,
 	)
 	defer stopProcess(server)
 	waitTCP(t, ctx, wsAddr)
+	waitTCP(t, ctx, metricsAddr)
 
 	client := startXTunnel(t, ctx, binPath, clientLog,
 		"-l", "socks5://"+socksAddr+",tcp://"+tcpAddr+"/"+targetAddr+",http://"+httpProxyAddr,
@@ -75,6 +78,9 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	assertBody(t, "http proxy", fetchViaHTTPProxy(t, httpProxyAddr, "http://"+targetAddr+"/payload"), body)
 	assertBody(t, "http connect", fetchViaHTTPConnect(t, httpProxyAddr, targetAddr, "/payload"), body)
 	assertBody(t, "socks5", fetchViaSOCKS5(t, socksAddr, targetAddr, "/payload"), body)
+	udpTargetAddr := startUDPEcho(t)
+	assertBody(t, "socks5 udp", string(fetchUDPViaSOCKS5(t, socksAddr, udpTargetAddr, []byte("ping"))), "echo:ping")
+	assertMetrics(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"))
 
 	badClient := startXTunnel(t, ctx, binPath, badClientLog,
 		"-l", "socks5://"+freeTCPAddr(t),
@@ -278,6 +284,146 @@ func fetchViaSOCKS5(t *testing.T, proxyAddr, targetAddr, path string) string {
 	return readHTTPResponseBody(t, bufio.NewReader(conn))
 }
 
+func startUDPEcho(t *testing.T) string {
+	t.Helper()
+	addr, err := net.ResolveUDPAddr("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("resolve UDP addr: %v", err)
+	}
+	conn, err := net.ListenUDP("udp", addr)
+	if err != nil {
+		t.Fatalf("listen UDP echo: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, peer, err := conn.ReadFromUDP(buf)
+			if err != nil {
+				return
+			}
+			_, _ = conn.WriteToUDP(append([]byte("echo:"), buf[:n]...), peer)
+		}
+	}()
+	return conn.LocalAddr().String()
+}
+
+func fetchUDPViaSOCKS5(t *testing.T, proxyAddr, targetAddr string, payload []byte) []byte {
+	t.Helper()
+	control, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial SOCKS5 proxy: %v", err)
+	}
+	defer control.Close()
+
+	if _, err := control.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		t.Fatalf("write SOCKS5 greeting: %v", err)
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(control, greeting); err != nil {
+		t.Fatalf("read SOCKS5 greeting: %v", err)
+	}
+	if !bytes.Equal(greeting, []byte{0x05, 0x00}) {
+		t.Fatalf("SOCKS5 greeting = %v", greeting)
+	}
+
+	if _, err := control.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+		t.Fatalf("write UDP associate: %v", err)
+	}
+	relayAddr := readSOCKS5BoundAddr(t, control, proxyAddr)
+
+	udpConn, err := net.ListenUDP("udp", nil)
+	if err != nil {
+		t.Fatalf("listen local UDP: %v", err)
+	}
+	defer udpConn.Close()
+	if err := udpConn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatalf("set UDP deadline: %v", err)
+	}
+
+	host, portStr, err := net.SplitHostPort(targetAddr)
+	if err != nil {
+		t.Fatalf("split UDP target: %v", err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		t.Fatalf("parse UDP target port: %v", err)
+	}
+	packet, err := buildSOCKS5UDPPacket(host, port, payload)
+	if err != nil {
+		t.Fatalf("build SOCKS5 UDP packet: %v", err)
+	}
+	if _, err := udpConn.WriteToUDP(packet, relayAddr); err != nil {
+		t.Fatalf("write UDP packet to SOCKS5 relay: %v", err)
+	}
+
+	buf := make([]byte, 2048)
+	n, _, err := udpConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read UDP response: %v", err)
+	}
+	_, gotPayload, err := parseSOCKS5UDPPacket(buf[:n])
+	if err != nil {
+		t.Fatalf("parse SOCKS5 UDP response: %v", err)
+	}
+	return gotPayload
+}
+
+func readSOCKS5BoundAddr(t *testing.T, r io.Reader, proxyAddr string) *net.UDPAddr {
+	t.Helper()
+	head := make([]byte, 4)
+	if _, err := io.ReadFull(r, head); err != nil {
+		t.Fatalf("read SOCKS5 response head: %v", err)
+	}
+	if head[1] != 0x00 {
+		t.Fatalf("SOCKS5 response status = %d", head[1])
+	}
+	var host string
+	switch head[3] {
+	case 0x01:
+		raw := make([]byte, 4)
+		if _, err := io.ReadFull(r, raw); err != nil {
+			t.Fatalf("read SOCKS5 IPv4 bound addr: %v", err)
+		}
+		host = net.IP(raw).String()
+	case 0x04:
+		raw := make([]byte, 16)
+		if _, err := io.ReadFull(r, raw); err != nil {
+			t.Fatalf("read SOCKS5 IPv6 bound addr: %v", err)
+		}
+		host = net.IP(raw).String()
+	case 0x03:
+		lenRaw := make([]byte, 1)
+		if _, err := io.ReadFull(r, lenRaw); err != nil {
+			t.Fatalf("read SOCKS5 domain len: %v", err)
+		}
+		raw := make([]byte, int(lenRaw[0]))
+		if _, err := io.ReadFull(r, raw); err != nil {
+			t.Fatalf("read SOCKS5 domain bound addr: %v", err)
+		}
+		host = string(raw)
+	default:
+		t.Fatalf("unexpected SOCKS5 address type %d", head[3])
+	}
+	portRaw := make([]byte, 2)
+	if _, err := io.ReadFull(r, portRaw); err != nil {
+		t.Fatalf("read SOCKS5 bound port: %v", err)
+	}
+	port := int(portRaw[0])<<8 | int(portRaw[1])
+	if host == "0.0.0.0" || host == "::" {
+		proxyHost, _, err := net.SplitHostPort(proxyAddr)
+		if err != nil {
+			t.Fatalf("split proxy addr: %v", err)
+		}
+		host = proxyHost
+	}
+	addr, err := net.ResolveUDPAddr("udp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Fatalf("resolve SOCKS5 UDP relay addr: %v", err)
+	}
+	return addr
+}
+
 func readOKBody(t *testing.T, resp *http.Response) string {
 	t.Helper()
 	if resp.StatusCode != http.StatusOK {
@@ -304,5 +450,19 @@ func assertBody(t *testing.T, label, got, want string) {
 	t.Helper()
 	if got != want {
 		t.Fatalf("%s body = %q, want %q", label, got, want)
+	}
+}
+
+func assertMetrics(t *testing.T, got string) {
+	t.Helper()
+	for _, want := range []string{
+		"x_tunnel_server_streams_total",
+		"x_tunnel_udp_associations_total",
+		"x_tunnel_client_reconnects_total",
+		"x_tunnel_server_sessions",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metrics missing %q:\n%s", want, got)
+		}
 	}
 }

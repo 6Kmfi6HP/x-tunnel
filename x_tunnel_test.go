@@ -5,6 +5,7 @@ import (
 	"context"
 	"io"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -87,6 +88,50 @@ func TestSleepWithContextCanceled(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("sleepWithContext took too long after cancellation: %s", elapsed)
+	}
+}
+
+func TestVersionString(t *testing.T) {
+	oldVersion, oldCommit, oldDate := buildVersion, buildCommit, buildDate
+	defer func() {
+		buildVersion, buildCommit, buildDate = oldVersion, oldCommit, oldDate
+	}()
+	buildVersion = "1.2.3"
+	buildCommit = "abc123"
+	buildDate = "2026-05-16"
+	want := "x-tunnel version=1.2.3 commit=abc123 build=2026-05-16"
+	if got := versionString(); got != want {
+		t.Fatalf("versionString() = %q, want %q", got, want)
+	}
+}
+
+func TestWriteMetrics(t *testing.T) {
+	oldStreams := atomic.LoadUint64(&serverStreamSeq)
+	oldUDP := atomic.LoadUint64(&udpAssociationSeq)
+	oldReconnects := atomic.LoadUint64(&clientReconnectSeq)
+	defer func() {
+		atomic.StoreUint64(&serverStreamSeq, oldStreams)
+		atomic.StoreUint64(&udpAssociationSeq, oldUDP)
+		atomic.StoreUint64(&clientReconnectSeq, oldReconnects)
+		serverSessions.Delete("metrics-test")
+	}()
+	atomic.StoreUint64(&serverStreamSeq, 7)
+	atomic.StoreUint64(&udpAssociationSeq, 3)
+	atomic.StoreUint64(&clientReconnectSeq, 2)
+	serverSessions.Store("metrics-test", &ClientSession{clientID: "metrics-test"})
+
+	var buf bytes.Buffer
+	writeMetrics(&buf)
+	got := buf.String()
+	for _, want := range []string{
+		"x_tunnel_server_streams_total 7",
+		"x_tunnel_udp_associations_total 3",
+		"x_tunnel_client_reconnects_total 2",
+		"x_tunnel_server_sessions",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("metrics output missing %q:\n%s", want, got)
+		}
 	}
 }
 

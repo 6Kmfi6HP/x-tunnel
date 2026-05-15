@@ -130,7 +130,7 @@ Verification:
 ## Candidate Backlog After 19:00
 
 - QUIC/WebTransport transport option.
-- Metrics endpoint or Prometheus counters.
+- [x] Metrics endpoint or Prometheus counters.
 - Config file support.
 - mTLS or stronger client authentication.
 - Benchmark suite and load testing.
@@ -242,7 +242,7 @@ Phase 8:
 Remaining risks/backlog:
 
 - Add CI so `go test ./...` runs automatically on push/PR.
-- Expand automated integration tests to cover UDP relay and WSS/fallback modes.
+- Expand automated integration tests to cover WSS/fallback modes.
 - Add release build metadata defaults in a documented build script.
 - Consider mTLS or signed client auth beyond bearer-token subprotocol auth.
 
@@ -252,7 +252,7 @@ Post Phase 8 backlog:
 - CI runs on push and pull request with Go `1.24.4`.
 - CI steps: module download, `go test ./...`, `go test -cover ./...`, and `go build -o x-tunnel .`.
 - Added `integration_test.go` to automate the local tunnel matrix inside `go test ./...`.
-- Integration test builds a temporary binary and covers WS server, SOCKS5, TCP forward, HTTP proxy GET, HTTP CONNECT, and wrong-token rejection.
+- Integration test builds a temporary binary and covers WS server, SOCKS5 TCP, SOCKS5 UDP relay, TCP forward, HTTP proxy GET, HTTP CONNECT, and wrong-token rejection.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
 - Added `integration_test.go`, which builds a temporary x-tunnel binary, starts a real local WS server/client pair, and verifies TCP forward plus HTTP proxy traffic against an `httptest` server.
@@ -267,3 +267,12 @@ Post Phase 8 backlog:
   - `BenchmarkSmuxOpenHeaderRoundTrip-8`: `93.52 ns/op`
   - `BenchmarkChunkRoundTrip-8`: `294.5 ns/op`
   - `BenchmarkUDPReplyRoundTrip-8`: `331.6 ns/op`
+
+Post Phase 8 metrics:
+
+- Added optional `-metrics` HTTP endpoint exposing Prometheus-style text at `/metrics`.
+- Metrics include server stream count, UDP association count, client reconnect count, and active server session count.
+- Documented `-metrics` in `README.md`.
+- Verified with `go test ./...`: pass.
+- Verified with `go test -cover ./...`: pass, `coverage: 16.3% of statements`.
+- Verified real metrics endpoint: `metrics_smoke=pass`, with all four metric names present.

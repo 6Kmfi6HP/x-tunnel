@@ -74,6 +74,15 @@ curl http://127.0.0.1:12000/
 
 See [docs/deployment.md](docs/deployment.md) for token limits, source filtering, target filtering, and TLS/ECH notes.
 
+## Metrics
+
+Expose lightweight Prometheus-style counters with `-metrics`:
+
+```bash
+./x-tunnel -l ws://127.0.0.1:18080/tunnel -token local-test-token -metrics 127.0.0.1:9090
+curl http://127.0.0.1:9090/metrics
+```
+
 ## Troubleshooting
 
 - `认证失败：Token 不匹配或未提供`: client and server `-token` values differ, or the token contains characters that are not valid WebSocket subprotocol token characters.

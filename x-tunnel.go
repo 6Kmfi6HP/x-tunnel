@@ -136,6 +136,7 @@ var (
 	keyFile          string
 	token            string
 	showVersion      bool
+	metricsAddr      string
 	cidrs            string
 	targetAllowCIDRs string
 	targetDenyCIDRs  string
@@ -160,8 +161,9 @@ var (
 	targetPolicy *TargetPolicy
 	ipStrategy   byte
 
-	serverStreamSeq   uint64
-	udpAssociationSeq uint64
+	serverStreamSeq    uint64
+	udpAssociationSeq  uint64
+	clientReconnectSeq uint64
 )
 
 var (
@@ -199,6 +201,7 @@ func init() {
 	flag.StringVar(&keyFile, "key", "", "TLS密钥文件路径（默认:自动生成，仅服务端）")
 	flag.StringVar(&token, "token", "", "身份验证令牌（WebSocket Subprotocol）")
 	flag.BoolVar(&showVersion, "version", false, "输出版本信息并退出")
+	flag.StringVar(&metricsAddr, "metrics", "", "可选 metrics HTTP 监听地址，如 127.0.0.1:9090")
 	flag.StringVar(&cidrs, "cidr", "0.0.0.0/0,::/0", "允许的来源 IP 范围 (CIDR),多个范围用逗号分隔")
 	flag.StringVar(&targetAllowCIDRs, "allow-target", "", "服务端允许访问的目标 CIDR，多个用逗号分隔（留空表示不限制）")
 	flag.StringVar(&targetDenyCIDRs, "deny-target", "", "服务端拒绝访问的目标 CIDR，多个用逗号分隔")
@@ -325,8 +328,16 @@ func main() {
 	if err := validateToken(token); err != nil {
 		log.Fatalf("[配置] token 无效: %v", err)
 	}
+	if metricsAddr != "" {
+		if err := validateListenHostPort(metricsAddr); err != nil {
+			log.Fatalf("[配置] metrics 地址无效: %v", err)
+		}
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if metricsAddr != "" {
+		go runMetricsServer(ctx, metricsAddr)
+	}
 
 	ipStrategy = parseIPStrategy(ips)
 	if ips != "" {
@@ -1564,6 +1575,40 @@ func shutdownHTTPServer(ctx context.Context, server *http.Server) {
 	}
 }
 
+func runMetricsServer(ctx context.Context, addr string) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+		writeMetrics(w)
+	})
+	server := &http.Server{Addr: addr, Handler: mux}
+	go shutdownHTTPServer(ctx, server)
+	log.Printf("[metrics] HTTP 启动 %s/metrics", addr)
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("[metrics] HTTP 启动失败: %v", err)
+	}
+}
+
+func writeMetrics(w io.Writer) {
+	fmt.Fprintf(w, "# TYPE x_tunnel_server_streams_total counter\n")
+	fmt.Fprintf(w, "x_tunnel_server_streams_total %d\n", atomic.LoadUint64(&serverStreamSeq))
+	fmt.Fprintf(w, "# TYPE x_tunnel_udp_associations_total counter\n")
+	fmt.Fprintf(w, "x_tunnel_udp_associations_total %d\n", atomic.LoadUint64(&udpAssociationSeq))
+	fmt.Fprintf(w, "# TYPE x_tunnel_client_reconnects_total counter\n")
+	fmt.Fprintf(w, "x_tunnel_client_reconnects_total %d\n", atomic.LoadUint64(&clientReconnectSeq))
+	fmt.Fprintf(w, "# TYPE x_tunnel_server_sessions gauge\n")
+	fmt.Fprintf(w, "x_tunnel_server_sessions %d\n", countServerSessions())
+}
+
+func countServerSessions() int {
+	count := 0
+	serverSessions.Range(func(_, _ any) bool {
+		count++
+		return true
+	})
+	return count
+}
+
 // 根据 IP 策略拨号 TCP
 func dialTCPWithStrategy(addr string, strategy byte) (net.Conn, error) {
 	host, port, err := net.SplitHostPort(addr)
@@ -1909,6 +1954,7 @@ func (p *ECHPool) dialAndServe(ctx context.Context, idx int, ip string) {
 	reconnectAttempt := 0
 	sleepBeforeReconnect := func(reason string) bool {
 		delay := reconnectDelay(reconnectAttempt)
+		atomic.AddUint64(&clientReconnectSeq, 1)
 		log.Printf("[客户端] 通道 %d (IP:%s) %s，%s 后重试 (attempt=%d)", chID, ipLabel, reason, delay, reconnectAttempt+1)
 		reconnectAttempt++
 		return sleepWithContext(ctx, delay)
