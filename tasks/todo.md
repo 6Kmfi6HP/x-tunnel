@@ -138,6 +138,7 @@ Verification:
 - [x] CI workflow.
 - [x] Automated local integration test.
 - [x] Release build metadata script.
+- [x] Protocol helper benchmarks.
 
 ## Review
 
@@ -261,3 +262,8 @@ Post Phase 8 backlog:
 - Documented the build script in `README.md`.
 - Verified build script with `OUT=/tmp/x-tunnel-build-check VERSION=0.1.0 COMMIT=testcommit BUILD_DATE=2026-05-16T00:00:00Z ./scripts/build.sh`.
 - Verified generated binary output: `x-tunnel version=0.1.0 commit=testcommit build=2026-05-16T00:00:00Z`.
+- Added protocol helper benchmarks for smux open headers, chunks, and UDP replies.
+- Verified short benchmark run:
+  - `BenchmarkSmuxOpenHeaderRoundTrip-8`: `93.52 ns/op`
+  - `BenchmarkChunkRoundTrip-8`: `294.5 ns/op`
+  - `BenchmarkUDPReplyRoundTrip-8`: `331.6 ns/op`
