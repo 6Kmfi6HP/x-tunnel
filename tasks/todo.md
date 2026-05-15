@@ -498,3 +498,19 @@ Verification:
 - `go run . -l socks5://127.0.0.1:12345 -f ws://127.0.0.1:1/tunnel -block 443abc`: exits non-zero with `-block 参数无效`.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 30.4% of statements`.
+
+Post Phase 8 benchmark expansion:
+
+- [x] Add stable microbenchmarks for target policy checks, DNS query construction, and TCP open-status frames.
+- [x] Run a short benchmark pass plus full tests and coverage.
+- [x] Record benchmark evidence and commit.
+
+Verification:
+
+- `go test -run '^$' -bench 'Benchmark(TCPOpenStatus|TargetPolicy|BuildDNSQuery)' -benchtime=100ms ./...`: pass.
+  - `BenchmarkTCPOpenStatusRoundTrip-8`: `112.2 ns/op`.
+  - `BenchmarkTargetPolicyAllowsCIDR-8`: `66.66 ns/op`.
+  - `BenchmarkTargetPolicyAllowsHost-8`: `79.98 ns/op`.
+  - `BenchmarkBuildDNSQuery-8`: `110.9 ns/op`.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 30.4% of statements`.
