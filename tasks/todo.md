@@ -147,6 +147,7 @@ Phase 1:
 Phase 2:
 
 - Added `x_tunnel_test.go` unit tests for IP strategy parsing, SOCKS5 auth/address parsing, smux open headers, UDP chunks, UDP replies, SOCKS5 UDP packet round-trips, and malformed SOCKS5 UDP inputs.
+- Added bounds checks for oversized UDP reply payloads and oversized SOCKS5 UDP domain names to prevent length-field truncation.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 10.0% of statements`.
 
