@@ -136,6 +136,7 @@ Verification:
 - Benchmark suite and load testing.
 - Windows/Linux/macOS release packaging.
 - [x] CI workflow.
+- [x] Automated local integration test.
 
 ## Review
 
@@ -248,3 +249,6 @@ Post Phase 8 backlog:
 - Added GitHub Actions CI workflow at `.github/workflows/ci.yml`.
 - CI runs on push and pull request with Go `1.24.4`.
 - CI steps: module download, `go test ./...`, `go test -cover ./...`, and `go build -o x-tunnel .`.
+- Added `integration_test.go`, which builds a temporary x-tunnel binary, starts a real local WS server/client pair, and verifies TCP forward plus HTTP proxy traffic against an `httptest` server.
+- Verified with `go test ./...`: pass, including integration test.
+- Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
