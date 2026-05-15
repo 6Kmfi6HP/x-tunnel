@@ -193,9 +193,10 @@ Phase 5:
 - Added unit tests for config validation and target policy behavior.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
-- Verified wrong-token rejection with a real server/client: `phase5_token_reject=pass`.
+- Verified wrong-token rejection with a real server/client: `phase5_unauthorized_token=pass`.
 - Wrong-token evidence: client logged `认证失败：Token 不匹配或未提供`; server logged `Token 认证失败，来源 IP: 127.0.0.1`.
-- Verified target policy rejection with server `-allow-target 10.0.0.0/8` and client request to `127.0.0.1:19095`: `phase5_target_policy=pass curl_code=52`.
-- Target policy evidence: server logged `TCP 拒绝: 127.0.0.1:19095, reason=目标 127.0.0.1 未命中 allow-target`.
+- Verified allowed target policy smoke with server `-allow-target 127.0.0.0/8`: `phase5_policy_smoke=pass hash=4eecc23f5206ec6b4e30afb974965f817b156ec67ae9ad17fe6dd76c443c28d0`.
+- Verified target policy rejection with server `-allow-target 10.0.0.0/8` and client request to `127.0.0.1:19096`: `phase5_target_policy=pass curl_code=52`.
+- Target policy evidence: server logged `TCP 拒绝: 127.0.0.1:19096, reason=目标 127.0.0.1 未命中 allow-target`.
 
 Pending for later phases: observability/operator UX, integration smoke tests, and final review.
