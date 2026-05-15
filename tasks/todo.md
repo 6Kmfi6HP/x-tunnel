@@ -787,3 +787,17 @@ Verification:
 - `go test -run 'Test(Socks5ConnectRejects|HandleSOCKS5Rejects|HandleSOCKS5UserPassAuthRejectsShortRequest)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 40.3% of statements`.
+
+Post Phase 8 upstream SOCKS5 auth method enforcement:
+
+- [x] Offer only username/password auth to upstream SOCKS5 proxies when credentials are configured.
+- [x] Reject upstream proxies that select a method the client did not offer.
+- [x] Add unit coverage for forced user/pass and invalid no-auth selection.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(Socks5Handshake|IntegrationUpstreamSOCKS5Auth)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 41.4% of statements`.

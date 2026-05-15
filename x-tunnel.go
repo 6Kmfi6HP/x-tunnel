@@ -1425,7 +1425,7 @@ func dialViaSocks5(network, addr string) (net.Conn, error) {
 func socks5Handshake(conn net.Conn, config *SOCKS5Config) error {
 	var methods []byte
 	if config.Username != "" && config.Password != "" {
-		methods = []byte{0x00, 0x02}
+		methods = []byte{0x02}
 	} else {
 		methods = []byte{0x00}
 	}
@@ -1445,8 +1445,14 @@ func socks5Handshake(conn net.Conn, config *SOCKS5Config) error {
 	}
 	switch response[1] {
 	case 0x00:
+		if !bytes.Contains(methods, []byte{0x00}) {
+			return fmt.Errorf("服务器选择了未提供的认证方法: %d", response[1])
+		}
 		return nil
 	case 0x02:
+		if !bytes.Contains(methods, []byte{0x02}) {
+			return fmt.Errorf("服务器选择了未提供的认证方法: %d", response[1])
+		}
 		return socks5UserPassAuthSrv(conn, config.Username, config.Password)
 	case 0xFF:
 		return errors.New("服务器不接受认证")

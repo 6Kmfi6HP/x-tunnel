@@ -1181,6 +1181,109 @@ func TestParseSOCKS5AddrRejectsIncompleteAuth(t *testing.T) {
 	}
 }
 
+func TestSocks5HandshakeWithAuthOffersOnlyUserPass(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- socks5Handshake(client, &SOCKS5Config{Username: "user", Password: "pass"})
+	}()
+
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(server, head); err != nil {
+		t.Fatalf("read SOCKS5 greeting head: %v", err)
+	}
+	if !bytes.Equal(head, []byte{0x05, 0x01}) {
+		t.Fatalf("SOCKS5 greeting head = %v, want [5 1]", head)
+	}
+	methods := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(server, methods); err != nil {
+		t.Fatalf("read SOCKS5 methods: %v", err)
+	}
+	if !bytes.Equal(methods, []byte{0x02}) {
+		t.Fatalf("SOCKS5 methods = %v, want [2]", methods)
+	}
+	if _, err := server.Write([]byte{0x05, 0x02}); err != nil {
+		t.Fatalf("write SOCKS5 method selection: %v", err)
+	}
+	if got := readSOCKS5AuthRequest(t, server); got != "user:pass" {
+		t.Fatalf("SOCKS5 auth request = %q, want %q", got, "user:pass")
+	}
+	if _, err := server.Write([]byte{0x01, 0x00}); err != nil {
+		t.Fatalf("write SOCKS5 auth response: %v", err)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("socks5Handshake returned error: %v", err)
+	}
+}
+
+func TestSocks5HandshakeRejectsUnofferedMethod(t *testing.T) {
+	tests := []struct {
+		name         string
+		config       *SOCKS5Config
+		serverMethod byte
+	}{
+		{name: "auth config rejects no auth", config: &SOCKS5Config{Username: "user", Password: "pass"}, serverMethod: 0x00},
+		{name: "no auth config rejects userpass", config: &SOCKS5Config{}, serverMethod: 0x02},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, client := net.Pipe()
+			defer server.Close()
+			defer client.Close()
+			_ = server.SetDeadline(time.Now().Add(time.Second))
+			_ = client.SetDeadline(time.Now().Add(time.Second))
+
+			errCh := make(chan error, 1)
+			go func() {
+				errCh <- socks5Handshake(client, tt.config)
+			}()
+			head := make([]byte, 2)
+			if _, err := io.ReadFull(server, head); err != nil {
+				t.Fatalf("read SOCKS5 greeting head: %v", err)
+			}
+			methods := make([]byte, int(head[1]))
+			if _, err := io.ReadFull(server, methods); err != nil {
+				t.Fatalf("read SOCKS5 methods: %v", err)
+			}
+			if _, err := server.Write([]byte{0x05, tt.serverMethod}); err != nil {
+				t.Fatalf("write SOCKS5 method selection: %v", err)
+			}
+			if err := <-errCh; err == nil {
+				t.Fatalf("socks5Handshake accepted unoffered method 0x%02x after offering %v", tt.serverMethod, methods)
+			}
+		})
+	}
+}
+
+func readSOCKS5AuthRequest(t *testing.T, r io.Reader) string {
+	t.Helper()
+	head := make([]byte, 2)
+	if _, err := io.ReadFull(r, head); err != nil {
+		t.Fatalf("read SOCKS5 auth head: %v", err)
+	}
+	if head[0] != 0x01 {
+		t.Fatalf("SOCKS5 auth version = %d, want 1", head[0])
+	}
+	username := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(r, username); err != nil {
+		t.Fatalf("read SOCKS5 username: %v", err)
+	}
+	plen := make([]byte, 1)
+	if _, err := io.ReadFull(r, plen); err != nil {
+		t.Fatalf("read SOCKS5 password length: %v", err)
+	}
+	password := make([]byte, int(plen[0]))
+	if _, err := io.ReadFull(r, password); err != nil {
+		t.Fatalf("read SOCKS5 password: %v", err)
+	}
+	return string(username) + ":" + string(password)
+}
+
 func TestSocks5ConnectRejectsTruncatedBoundAddress(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
