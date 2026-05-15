@@ -843,3 +843,31 @@ Verification:
 - `go test -run 'Test(ResolveUDPWithStrategyRejectsInvalidPort|UDPAssociationHandleUDPResponseRejectsInvalidPort|SOCKS5UDPPacket|SOCKS5UDPResp)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 42.1% of statements`.
+
+Post Phase 8 SOCKS5 UDP associate relay validation:
+
+- [x] Reject upstream SOCKS5 UDP ASSOCIATE responses with unknown address types.
+- [x] Reject upstream SOCKS5 UDP ASSOCIATE responses with relay port 0.
+- [x] Resolve relay hosts with `net.JoinHostPort` so IPv6 relay addresses are handled correctly.
+- [x] Add focused unit coverage and run full verification before commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestNewSOCKS5UDPRelay' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 44.5% of statements`.
+
+Post Phase 8 HTTP proxy auth rejection unit coverage:
+
+- [x] Add direct `handleHTTP` coverage for missing proxy auth.
+- [x] Add direct `handleHTTP` coverage for wrong Basic proxy auth.
+- [x] Assert both responses are HTTP 407 with `Proxy-Authenticate`.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(HandleHTTPRejectsProxyAuth|ParseAuthAndAddr)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 44.5% of statements`.

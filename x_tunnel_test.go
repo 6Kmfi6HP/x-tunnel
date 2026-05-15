@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -1349,6 +1350,113 @@ func TestSocks5ConnectRejectsInvalidTargetPort(t *testing.T) {
 	}
 }
 
+func TestNewSOCKS5UDPRelayRejectsInvalidAssociateResponse(t *testing.T) {
+	tests := []struct {
+		name     string
+		response []byte
+		want     string
+	}{
+		{name: "unknown address type", response: []byte{0x05, 0x00, 0x00, 0x09}, want: "地址类型无效"},
+		{name: "zero relay port", response: []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0}, want: "端口"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxyAddr, waitProxy := startSOCKS5UDPAssociateResponse(t, tt.response)
+			oldConfig := socks5Config
+			socks5Config = &SOCKS5Config{Host: proxyAddr}
+			t.Cleanup(func() { socks5Config = oldConfig })
+
+			relay, err := newSOCKS5UDPRelay("127.0.0.1:53")
+			if relay != nil {
+				_ = relay.Close()
+			}
+			if err == nil {
+				t.Fatal("newSOCKS5UDPRelay accepted invalid UDP ASSOCIATE response")
+			}
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("newSOCKS5UDPRelay error = %v, want %q", err, tt.want)
+			}
+			waitProxy()
+		})
+	}
+}
+
+func TestNewSOCKS5UDPRelayAcceptsIPv6AssociateRelay(t *testing.T) {
+	ip := net.ParseIP("2001:db8::1")
+	response := []byte{0x05, 0x00, 0x00, 0x04}
+	response = append(response, ip.To16()...)
+	response = append(response, 0x14, 0xe9)
+	proxyAddr, waitProxy := startSOCKS5UDPAssociateResponse(t, response)
+
+	oldConfig := socks5Config
+	socks5Config = &SOCKS5Config{Host: proxyAddr}
+	t.Cleanup(func() { socks5Config = oldConfig })
+
+	relay, err := newSOCKS5UDPRelay("127.0.0.1:53")
+	if err != nil {
+		t.Fatalf("newSOCKS5UDPRelay returned error: %v", err)
+	}
+	defer relay.Close()
+	waitProxy()
+
+	if relay.relayAddr == nil || !relay.relayAddr.IP.Equal(ip) || relay.relayAddr.Port != 5353 {
+		t.Fatalf("relay addr = %#v, want [%s]:5353", relay.relayAddr, ip)
+	}
+}
+
+func startSOCKS5UDPAssociateResponse(t *testing.T, response []byte) (string, func()) {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen SOCKS5 UDP associate proxy: %v", err)
+	}
+	errCh := make(chan error, 1)
+	go func() {
+		defer listener.Close()
+		conn, err := listener.Accept()
+		if err != nil {
+			errCh <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+
+		head := make([]byte, 2)
+		if _, err := io.ReadFull(conn, head); err != nil {
+			errCh <- err
+			return
+		}
+		methods := make([]byte, int(head[1]))
+		if _, err := io.ReadFull(conn, methods); err != nil {
+			errCh <- err
+			return
+		}
+		if _, err := conn.Write([]byte{0x05, 0x00}); err != nil {
+			errCh <- err
+			return
+		}
+		req := make([]byte, 10)
+		if _, err := io.ReadFull(conn, req); err != nil {
+			errCh <- err
+			return
+		}
+		_, err = conn.Write(response)
+		errCh <- err
+	}()
+	return listener.Addr().String(), func() {
+		t.Helper()
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatalf("SOCKS5 UDP associate proxy failed: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("SOCKS5 UDP associate proxy did not finish")
+		}
+	}
+}
+
 func TestHandleSOCKS5UserPassAuthRejectsShortRequest(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -1466,6 +1574,54 @@ func TestParseAuthAndAddrRejectsIncompleteAuth(t *testing.T) {
 			t.Fatalf("parseAuthAndAddr(%q) accepted invalid auth/listen address", in)
 		}
 	}
+}
+
+func TestHandleHTTPRejectsProxyAuth(t *testing.T) {
+	wrongAuth := base64.StdEncoding.EncodeToString([]byte("user:wrong"))
+	tests := []struct {
+		name    string
+		request string
+	}{
+		{
+			name:    "missing auth",
+			request: "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\n\r\n",
+		},
+		{
+			name:    "wrong auth",
+			request: "GET http://example.com/ HTTP/1.1\r\nHost: example.com\r\nProxy-Authorization: Basic " + wrongAuth + "\r\n\r\n",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := handleHTTPResponse(t, tt.request, &ProxyConfig{Username: "user", Password: "pass"})
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusProxyAuthRequired {
+				t.Fatalf("HTTP status = %d, want %d", resp.StatusCode, http.StatusProxyAuthRequired)
+			}
+			if got := resp.Header.Get("Proxy-Authenticate"); got == "" {
+				t.Fatal("missing Proxy-Authenticate header")
+			}
+		})
+	}
+}
+
+func handleHTTPResponse(t *testing.T, request string, cfgp *ProxyConfig) *http.Response {
+	t.Helper()
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	go handleHTTP(server, cfgp)
+	if _, err := client.Write([]byte(request)); err != nil {
+		t.Fatalf("write HTTP proxy request: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(client), nil)
+	if err != nil {
+		t.Fatalf("read HTTP proxy response: %v", err)
+	}
+	return resp
 }
 
 func TestSmuxOpenHeaderRoundTrip(t *testing.T) {

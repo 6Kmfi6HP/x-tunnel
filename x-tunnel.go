@@ -1654,6 +1654,9 @@ func newSOCKS5UDPRelay(targetAddr string) (*SOCKS5UDPRelay, error) {
 			return nil, err
 		}
 		relayHost = net.IP(ipBuf).String()
+	default:
+		tcpConn.Close()
+		return nil, fmt.Errorf("UDP ASSOCIATE地址类型无效: %d", resp[3])
 	}
 	portBuf := make([]byte, 2)
 	if _, err := io.ReadFull(tcpConn, portBuf); err != nil {
@@ -1661,12 +1664,16 @@ func newSOCKS5UDPRelay(targetAddr string) (*SOCKS5UDPRelay, error) {
 		return nil, err
 	}
 	relayPort := int(portBuf[0])<<8 | int(portBuf[1])
+	if relayPort == 0 {
+		tcpConn.Close()
+		return nil, fmt.Errorf("UDP ASSOCIATE端口必须在 1-65535 之间")
+	}
 
 	if relayHost == "0.0.0.0" || relayHost == "::" {
 		h, _, _ := net.SplitHostPort(socks5Config.Host)
 		relayHost = h
 	}
-	rAddr, errResolve := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", relayHost, relayPort))
+	rAddr, errResolve := net.ResolveUDPAddr("udp", net.JoinHostPort(relayHost, strconv.Itoa(relayPort)))
 	if errResolve != nil {
 		tcpConn.Close()
 		return nil, errResolve
