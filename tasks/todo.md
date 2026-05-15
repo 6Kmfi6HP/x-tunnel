@@ -135,7 +135,7 @@ Verification:
 - mTLS or stronger client authentication.
 - Benchmark suite and load testing.
 - Windows/Linux/macOS release packaging.
-- CI workflow.
+- [x] CI workflow.
 
 ## Review
 
@@ -242,3 +242,9 @@ Remaining risks/backlog:
 - Add automated integration tests instead of shell-only smoke scripts.
 - Add release build metadata defaults in a documented build script.
 - Consider mTLS or signed client auth beyond bearer-token subprotocol auth.
+
+Post Phase 8 backlog:
+
+- Added GitHub Actions CI workflow at `.github/workflows/ci.yml`.
+- CI runs on push and pull request with Go `1.24.4`.
+- CI steps: module download, `go test ./...`, `go test -cover ./...`, and `go build -o x-tunnel .`.
