@@ -1799,6 +1799,7 @@ func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
+		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
 	}
 
 	for _, tt := range tests {
@@ -1822,6 +1823,7 @@ func TestSOCKS5UDPRespMalformed(t *testing.T) {
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
+		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
 	}
 
 	for _, tt := range tests {
@@ -1836,6 +1838,14 @@ func TestSOCKS5UDPRespMalformed(t *testing.T) {
 func TestBuildSOCKS5UDPPacketRejectsOversizedDomain(t *testing.T) {
 	if _, err := buildSOCKS5UDPPacket(strings.Repeat("x", 256), 53, nil); err == nil {
 		t.Fatal("buildSOCKS5UDPPacket accepted oversized domain")
+	}
+}
+
+func TestBuildSOCKS5UDPPacketRejectsInvalidPort(t *testing.T) {
+	for _, port := range []int{-1, 0, 65536, 70000} {
+		if _, err := buildSOCKS5UDPPacket("127.0.0.1", port, nil); err == nil {
+			t.Fatalf("buildSOCKS5UDPPacket accepted invalid port %d", port)
+		}
 	}
 }
 

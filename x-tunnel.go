@@ -1776,6 +1776,9 @@ func parseSOCKS5UDPResp(packet []byte) (*net.UDPAddr, []byte, error) {
 		return nil, nil, fmt.Errorf("端口字段过短")
 	}
 	port := int(packet[offset])<<8 | int(packet[offset+1])
+	if port == 0 {
+		return nil, nil, fmt.Errorf("端口必须在 1-65535 之间")
+	}
 	offset += 2
 	addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
 	if addr == nil {
@@ -3707,6 +3710,9 @@ func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
 		return "", nil, errors.New("端口字段过短")
 	}
 	p := int(b[off])<<8 | int(b[off+1])
+	if p == 0 {
+		return "", nil, errors.New("端口必须在 1-65535 之间")
+	}
 	off += 2
 	t := fmt.Sprintf("%s:%d", h, p)
 	if b[3] == 0x04 {
@@ -3716,6 +3722,9 @@ func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
 }
 
 func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
+	if p <= 0 || p > 65535 {
+		return nil, fmt.Errorf("端口必须在 1-65535 之间")
+	}
 	buf := []byte{0, 0, 0}
 	ip := net.ParseIP(h)
 	if ip4 := ip.To4(); ip4 != nil {

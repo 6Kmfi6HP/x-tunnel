@@ -674,6 +674,20 @@ Verification:
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 38.6% of statements`.
 
+Post Phase 8 SOCKS5 UDP port validation:
+
+- [x] Reject SOCKS5 UDP request packets with destination port 0.
+- [x] Reject upstream SOCKS5 UDP responses with source port 0.
+- [x] Reject SOCKS5 UDP packet construction when port is outside 1-65535.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestSOCKS5UDP(Packet|Resp)Malformed|TestBuildSOCKS5UDPPacketRejects(InvalidPort|OversizedDomain)|FuzzParseSOCKS5UDP' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 38.7% of statements`.
+
 Post Phase 8 SOCKS5 UDP header strict validation:
 
 - [x] Require SOCKS5 UDP request packets to have zero RSV and FRAG fields.
