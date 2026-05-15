@@ -159,8 +159,8 @@ Phase 3:
 - Updated `docs/protocol.md` with the hello frame format.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 11.5% of statements`.
-- Verified local WS smoke test with server `ws://127.0.0.1:18081/tunnel`, client SOCKS5 `127.0.0.1:11081`, TCP forward `127.0.0.1:12001`, and local HTTP target `127.0.0.1:19091`.
-- Smoke result: `phase3_smoke=pass hash=8f099f7578ffd733cbd2dbb20acd572448feefd2c104c887253829aa302223f7 socks_size=66737 tcp_size=66737`.
-- Negotiation evidence: client and server logs both contained `协议协商成功`, `version=1`, and `caps=0xf`.
+- Verified local WS smoke test with server `ws://127.0.0.1:18080/tunnel`, client SOCKS5 `127.0.0.1:11080`, TCP forward `127.0.0.1:12000`, and local HTTP target `127.0.0.1:19090`.
+- Smoke result: `phase3_smoke=pass`, source/SOCKS/TCP hash all `8f099f7578ffd733cbd2dbb20acd572448feefd2c104c887253829aa302223f7`.
+- Negotiation evidence: client log contained `协议协商成功: version=1 caps=0xf`; server log contained `协议协商成功: version=1 caps=0xf`.
 
 Pending for later phases: reliability/security changes, integration smoke tests, and final review.
