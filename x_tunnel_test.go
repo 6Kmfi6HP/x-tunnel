@@ -1444,6 +1444,97 @@ func TestHandleSmuxStreamHelloDeadline(t *testing.T) {
 	}
 }
 
+func TestHandleSmuxStreamRejectsUnsupportedProtocolHello(t *testing.T) {
+	oldCfg := cfg
+	oldProtocolRejects := atomic.LoadUint64(&serverProtocolRejectSeq)
+	oldProtocolFailures := atomic.LoadUint64(&serverProtocolFailureSeq)
+	defer func() {
+		cfg = oldCfg
+		atomic.StoreUint64(&serverProtocolRejectSeq, oldProtocolRejects)
+		atomic.StoreUint64(&serverProtocolFailureSeq, oldProtocolFailures)
+	}()
+	cfg.RTTProbeTimeout = time.Second
+	atomic.StoreUint64(&serverProtocolRejectSeq, 0)
+	atomic.StoreUint64(&serverProtocolFailureSeq, 0)
+
+	serverConn, clientConn := net.Pipe()
+	defer serverConn.Close()
+	defer clientConn.Close()
+
+	serverSession, err := smux.Server(serverConn, nil)
+	if err != nil {
+		t.Fatalf("smux server: %v", err)
+	}
+	defer serverSession.Close()
+	clientSession, err := smux.Client(clientConn, nil)
+	if err != nil {
+		t.Fatalf("smux client: %v", err)
+	}
+	defer clientSession.Close()
+
+	accepted := make(chan *smux.Stream, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- stream
+	}()
+
+	clientStream, err := clientSession.OpenStream()
+	if err != nil {
+		t.Fatalf("open smux stream: %v", err)
+	}
+	defer clientStream.Close()
+	_ = clientStream.SetDeadline(time.Now().Add(time.Second))
+	if err := writeSmuxOpenHeader(clientStream, streamKindHello, IPStrategyDefault, ""); err != nil {
+		t.Fatalf("write hello stream header: %v", err)
+	}
+	hello := currentProtocolHello()
+	hello.Version = protocolVersion + 1
+	if err := writeProtocolHello(clientStream, hello); err != nil {
+		t.Fatalf("write unsupported protocol hello: %v", err)
+	}
+
+	var serverStream *smux.Stream
+	select {
+	case serverStream = <-accepted:
+	case err := <-acceptErr:
+		t.Fatalf("accept smux stream: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for accepted smux stream")
+	}
+
+	done := make(chan struct{})
+	session := &ClientSession{clientID: "hello-reject-test", channels: make(map[uint64]*WSChannel)}
+	go func() {
+		defer close(done)
+		handleSmuxStream(session, &WSChannel{id: 1, session: session}, serverStream)
+	}()
+
+	response, err := readProtocolHello(clientStream)
+	if err != nil {
+		t.Fatalf("read protocol rejection response: %v", err)
+	}
+	if response.Status != protocolStatusUnsupportedVersion {
+		t.Fatalf("protocol response status = %d, want %d", response.Status, protocolStatusUnsupportedVersion)
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for unsupported protocol hello handler")
+	}
+	if got := atomic.LoadUint64(&serverProtocolRejectSeq); got != 1 {
+		t.Fatalf("serverProtocolRejectSeq = %d, want 1", got)
+	}
+	if got := atomic.LoadUint64(&serverProtocolFailureSeq); got != 0 {
+		t.Fatalf("serverProtocolFailureSeq = %d, want 0", got)
+	}
+}
+
 func TestProtocolHelloRoundTrip(t *testing.T) {
 	if protocolStatusOK != 0 {
 		t.Fatalf("protocolStatusOK = %d, want 0", protocolStatusOK)

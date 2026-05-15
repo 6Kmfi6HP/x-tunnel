@@ -731,3 +731,17 @@ Verification:
 - `go test -run TestIntegrationLocalProxyAuth -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 39.0% of statements`.
+
+Post Phase 8 protocol hello rejection handler coverage:
+
+- [x] Send an unsupported protocol version hello through the smux handler.
+- [x] Assert the server writes an unsupported-version protocol response.
+- [x] Assert the server protocol rejection counter increments without recording a failure.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSmuxStreamRejectsUnsupportedProtocolHello|TestHandleSmuxStreamHelloDeadline|Test(NegotiateProtocolHello|ProtocolHello)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 39.3% of statements`.
