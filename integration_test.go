@@ -176,6 +176,12 @@ func TestIntegrationLocalProxyAuth(t *testing.T) {
 	if got := fetchViaHTTPProxyStatusWithAuth(t, httpProxyAddr, "http://"+targetAddr+"/payload", "user", "wrong"); got != http.StatusProxyAuthRequired {
 		t.Fatalf("HTTP proxy status with wrong auth = %d, want %d", got, http.StatusProxyAuthRequired)
 	}
+	if got := fetchViaHTTPConnectStatus(t, httpProxyAddr, targetAddr); got != http.StatusProxyAuthRequired {
+		t.Fatalf("HTTP CONNECT status without auth = %d, want %d", got, http.StatusProxyAuthRequired)
+	}
+	if got := fetchViaHTTPConnectStatusWithAuth(t, httpProxyAddr, targetAddr, "user", "wrong"); got != http.StatusProxyAuthRequired {
+		t.Fatalf("HTTP CONNECT status with wrong auth = %d, want %d", got, http.StatusProxyAuthRequired)
+	}
 	assertBody(t, "http proxy auth", fetchViaHTTPProxyWithAuth(t, httpProxyAddr, "http://"+targetAddr+"/payload", "user", "pass"), body)
 	assertBody(t, "http connect auth", fetchViaHTTPConnectWithAuth(t, httpProxyAddr, targetAddr, "/payload", "user", "pass"), body)
 
@@ -623,6 +629,30 @@ func fetchViaHTTPConnect(t *testing.T, proxyAddr, targetAddr, path string) strin
 	return fetchViaHTTPConnectWithAuth(t, proxyAddr, targetAddr, path, "", "")
 }
 
+func fetchViaHTTPConnectStatus(t *testing.T, proxyAddr, targetAddr string) int {
+	t.Helper()
+	return fetchViaHTTPConnectStatusWithAuth(t, proxyAddr, targetAddr, "", "")
+}
+
+func fetchViaHTTPConnectStatusWithAuth(t *testing.T, proxyAddr, targetAddr, username, password string) int {
+	t.Helper()
+	conn, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+	if err != nil {
+		t.Fatalf("dial HTTP proxy: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(integrationIOTimeout)); err != nil {
+		t.Fatalf("set HTTP proxy deadline: %v", err)
+	}
+	writeHTTPConnectRequest(t, conn, targetAddr, username, password)
+	br := bufio.NewReader(conn)
+	status, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read CONNECT status: %v", err)
+	}
+	return parseHTTPStatusCode(t, status)
+}
+
 func fetchViaHTTPConnectWithAuth(t *testing.T, proxyAddr, targetAddr, path, username, password string) string {
 	t.Helper()
 	conn, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
@@ -634,18 +664,13 @@ func fetchViaHTTPConnectWithAuth(t *testing.T, proxyAddr, targetAddr, path, user
 		t.Fatalf("set HTTP proxy deadline: %v", err)
 	}
 
-	fmt.Fprintf(conn, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
-	if username != "" || password != "" {
-		auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
-		fmt.Fprintf(conn, "Proxy-Authorization: Basic %s\r\n", auth)
-	}
-	fmt.Fprint(conn, "\r\n")
+	writeHTTPConnectRequest(t, conn, targetAddr, username, password)
 	br := bufio.NewReader(conn)
 	status, err := br.ReadString('\n')
 	if err != nil {
 		t.Fatalf("read CONNECT status: %v", err)
 	}
-	if !strings.Contains(status, "200") {
+	if parseHTTPStatusCode(t, status) != http.StatusOK {
 		t.Fatalf("CONNECT status = %q", status)
 	}
 	for {
@@ -659,6 +684,29 @@ func fetchViaHTTPConnectWithAuth(t *testing.T, proxyAddr, targetAddr, path, user
 	}
 	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: %s\r\nConnection: close\r\n\r\n", path, targetAddr)
 	return readHTTPResponseBody(t, br)
+}
+
+func writeHTTPConnectRequest(t *testing.T, w io.Writer, targetAddr, username, password string) {
+	t.Helper()
+	fmt.Fprintf(w, "CONNECT %s HTTP/1.1\r\nHost: %s\r\n", targetAddr, targetAddr)
+	if username != "" || password != "" {
+		auth := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		fmt.Fprintf(w, "Proxy-Authorization: Basic %s\r\n", auth)
+	}
+	fmt.Fprint(w, "\r\n")
+}
+
+func parseHTTPStatusCode(t *testing.T, statusLine string) int {
+	t.Helper()
+	fields := strings.Fields(statusLine)
+	if len(fields) < 2 {
+		t.Fatalf("invalid HTTP status line %q", statusLine)
+	}
+	code, err := strconv.Atoi(fields[1])
+	if err != nil {
+		t.Fatalf("invalid HTTP status code in %q: %v", statusLine, err)
+	}
+	return code
 }
 
 func fetchViaSOCKS5(t *testing.T, proxyAddr, targetAddr, path string) string {
