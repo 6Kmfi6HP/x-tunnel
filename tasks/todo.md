@@ -92,19 +92,19 @@ Verification:
 
 Verification:
 
-- [x] `go run x-tunnel.go -h`
+- [x] `go run . -h`
 - [x] README/docs examples checked against actual flags.
 
 ### Phase 7: Refactor Only Where It Pays, 15:30-17:30
 
 - [x] Extract pure protocol encoding/decoding into a small file/package if tests show a clean boundary.
-- [x] Extract SOCKS5 parsing/building helpers if it reduces single-file risk without broad churn.
+- [ ] Extract SOCKS5 parsing/building helpers if it reduces single-file risk without broad churn.
 - [x] Avoid broad architectural rewrites unless current changes become hard to verify.
 
 Verification:
 
 - [x] `go test ./...`
-- [x] `go run x-tunnel.go -h`
+- [x] `go run . -h`
 - [x] Local WS server/client tunnel smoke test.
 
 ### Phase 8: Final Verification and Review, 17:30-19:00
@@ -209,8 +209,8 @@ Phase 6:
 - Added `docs/troubleshooting.md` for token mismatch, ECH/DNS lookup failures, no smux channel, target policy rejection, and source CIDR rejection.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 15.8% of statements`.
-- Verified `go run x-tunnel.go -version`: `x-tunnel version=dev commit=unknown build=unknown`.
-- Verified `go run x-tunnel.go -h`: pass and includes `-allow-target`, `-deny-target`, `-version`, and `socks5://`.
+- Verified `go run . -version`: `x-tunnel version=dev commit=unknown build=unknown`.
+- Verified `go run . -h`: pass and includes `-allow-target`, `-deny-target`, `-version`, and `socks5://`.
 - Verified real TCP log smoke: `phase6_log_smoke=pass hash=09d9c57acdfa0bacb95eb1b4854ea293fa27b5671ed8142f9db9c4995437a05a tcp_size=78465`.
 - Log evidence: server emitted `stream=4 client=240e1179 channel=1 kind=1 target=127.0.0.1:19096`.
 
@@ -220,7 +220,7 @@ Phase 7:
 - Kept SOCKS5 helpers in `x-tunnel.go` for now because they are still interleaved with listener and UDP relay behavior; extracting them now would be churn without a cleaner boundary.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
-- Verified `go run x-tunnel.go protocol.go -h`: pass and includes `-version` and `socks5://`.
+- Verified `go run . -h` and `go run x-tunnel.go protocol.go -h`: pass and includes `-version` and `socks5://`.
 - Verified local WS/SOCKS5/TCP smoke after refactor: `phase7_refactor_smoke=pass hash=9fbf747126281a01d9be3b3712502fb005e4441a5832baf68eb10df609470bfb socks_size=73026 tcp_size=73026`.
 - Log evidence after refactor: server emitted `stream=4 client=bd1b5253 channel=1 kind=1 target=127.0.0.1:19097`.
 
