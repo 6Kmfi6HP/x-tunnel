@@ -899,3 +899,32 @@ Verification:
 - `go test -run 'TestHandleSOCKS5Rejects(UnsupportedAddressType|UnsupportedCommand|ZeroConnectPort|Missing)' -count=1 ./...`: pass.
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 44.8% of statements`.
+
+Post Phase 8 HTTP proxy target validation:
+
+- [x] Extract HTTP proxy target authority normalization.
+- [x] Reject empty, malformed, or Host/absolute-URL mismatch targets before opening a tunnel.
+- [x] Preserve CONNECT default port 443 and HTTP default port 80 behavior.
+- [x] Add focused unit coverage and run full verification before commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(HTTPProxyTarget|HandleHTTPRejectsMalformedProxyTarget)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 45.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 SOCKS5 UDP empty domain validation:
+
+- [x] Reject SOCKS5 UDP request packets with empty domain names.
+- [x] Reject upstream SOCKS5 UDP responses with empty domain names.
+- [x] Reject SOCKS5 UDP packet construction with an empty host.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(SOCKS5UDPPacket|SOCKS5UDPResp|BuildSOCKS5UDPPacket)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 45.7% of statements`.

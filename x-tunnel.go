@@ -1796,6 +1796,9 @@ func parseSOCKS5UDPResp(packet []byte) (*net.UDPAddr, []byte, error) {
 			return nil, nil, fmt.Errorf("域名长度字段过短")
 		}
 		l := int(packet[offset])
+		if l == 0 {
+			return nil, nil, fmt.Errorf("域名不能为空")
+		}
 		offset++
 		if offset+l > len(packet) {
 			return nil, nil, fmt.Errorf("域名长度不足")
@@ -3759,6 +3762,9 @@ func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
 			return "", nil, errors.New("域名长度不足")
 		}
 		l := int(b[off])
+		if l == 0 {
+			return "", nil, errors.New("域名不能为空")
+		}
 		off++
 		if off+l > len(b) {
 			return "", nil, errors.New("域名长度不足")
@@ -3802,6 +3808,9 @@ func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
 		buf = append(buf, 0x04)
 		buf = append(buf, ip...)
 	} else {
+		if h == "" {
+			return nil, fmt.Errorf("域名不能为空")
+		}
 		if len(h) > 255 {
 			return nil, fmt.Errorf("域名过长")
 		}
@@ -3866,13 +3875,10 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	}
 	req.Header.Del("Proxy-Authorization")
 
-	target := req.Host
-	if !strings.Contains(target, ":") {
-		if req.Method == "CONNECT" {
-			target += ":443"
-		} else {
-			target += ":80"
-		}
+	target, err := httpProxyTarget(req)
+	if err != nil {
+		_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		return
 	}
 
 	var first []byte
@@ -3907,4 +3913,70 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	logClientConnEvent(c, "HTTP", target, decision, true)
 	defer logClientConnEvent(c, "HTTP", target, decision, false)
 	proxyConnStream(c, stream)
+}
+
+func httpProxyTarget(req *http.Request) (string, error) {
+	if req == nil {
+		return "", fmt.Errorf("请求为空")
+	}
+	defaultPort := "80"
+	if req.Method == "CONNECT" {
+		defaultPort = "443"
+	}
+
+	target := strings.TrimSpace(req.Host)
+	if req.Method != "CONNECT" && req.URL != nil && req.URL.IsAbs() {
+		if req.URL.User != nil {
+			return "", fmt.Errorf("代理目标不能包含 userinfo")
+		}
+		target = strings.TrimSpace(req.URL.Host)
+		if req.Host != "" {
+			hostTarget, err := normalizeHTTPProxyAuthority(req.Host, defaultPort)
+			if err != nil {
+				return "", err
+			}
+			urlTarget, err := normalizeHTTPProxyAuthority(target, defaultPort)
+			if err != nil {
+				return "", err
+			}
+			if !strings.EqualFold(hostTarget, urlTarget) {
+				return "", fmt.Errorf("Host 与代理目标不一致")
+			}
+			return urlTarget, nil
+		}
+	}
+	return normalizeHTTPProxyAuthority(target, defaultPort)
+}
+
+func normalizeHTTPProxyAuthority(authority, defaultPort string) (string, error) {
+	authority = strings.TrimSpace(authority)
+	if authority == "" {
+		return "", fmt.Errorf("代理目标不能为空")
+	}
+	if strings.ContainsAny(authority, " \t\r\n") {
+		return "", fmt.Errorf("代理目标包含非法字符")
+	}
+	if host, port, err := net.SplitHostPort(authority); err == nil {
+		if strings.TrimSpace(host) == "" {
+			return "", fmt.Errorf("host 不能为空")
+		}
+		if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+			return "", fmt.Errorf("port 必须在 1-65535 之间")
+		}
+		return net.JoinHostPort(host, port), nil
+	}
+	if strings.HasPrefix(authority, "[") {
+		if !strings.HasSuffix(authority, "]") {
+			return "", fmt.Errorf("IPv6 地址格式无效")
+		}
+		host := strings.TrimSuffix(strings.TrimPrefix(authority, "["), "]")
+		if net.ParseIP(host) == nil {
+			return "", fmt.Errorf("IPv6 地址格式无效")
+		}
+		return net.JoinHostPort(host, defaultPort), nil
+	}
+	if strings.Contains(authority, ":") {
+		return "", fmt.Errorf("代理目标地址无效")
+	}
+	return net.JoinHostPort(authority, defaultPort), nil
 }

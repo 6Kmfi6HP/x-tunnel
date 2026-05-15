@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1689,6 +1690,96 @@ func handleHTTPResponse(t *testing.T, request string, cfgp *ProxyConfig) *http.R
 	return resp
 }
 
+func TestHTTPProxyTarget(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *http.Request
+		want string
+	}{
+		{
+			name: "connect default port",
+			req:  &http.Request{Method: http.MethodConnect, Host: "example.com", URL: &url.URL{}},
+			want: "example.com:443",
+		},
+		{
+			name: "absolute url default port",
+			req:  &http.Request{Method: http.MethodGet, Host: "example.com", URL: &url.URL{Scheme: "http", Host: "example.com"}},
+			want: "example.com:80",
+		},
+		{
+			name: "absolute url explicit port",
+			req:  &http.Request{Method: http.MethodGet, Host: "example.com:8080", URL: &url.URL{Scheme: "http", Host: "example.com:8080"}},
+			want: "example.com:8080",
+		},
+		{
+			name: "origin form default port",
+			req:  &http.Request{Method: http.MethodGet, Host: "example.com", URL: &url.URL{Path: "/"}},
+			want: "example.com:80",
+		},
+		{
+			name: "ipv6 host default port",
+			req:  &http.Request{Method: http.MethodGet, Host: "[2001:db8::1]", URL: &url.URL{Path: "/"}},
+			want: "[2001:db8::1]:80",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := httpProxyTarget(tt.req)
+			if err != nil {
+				t.Fatalf("httpProxyTarget returned error: %v", err)
+			}
+			if got != tt.want {
+				t.Fatalf("httpProxyTarget = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestHTTPProxyTargetRejectsMalformed(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *http.Request
+	}{
+		{
+			name: "empty target",
+			req:  &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/"}},
+		},
+		{
+			name: "bad port",
+			req:  &http.Request{Method: http.MethodGet, Host: "example.com:bad", URL: &url.URL{Path: "/"}},
+		},
+		{
+			name: "host mismatch",
+			req:  &http.Request{Method: http.MethodGet, Host: "other.example", URL: &url.URL{Scheme: "http", Host: "example.com"}},
+		},
+		{
+			name: "userinfo absolute url",
+			req:  &http.Request{Method: http.MethodGet, Host: "example.com", URL: &url.URL{Scheme: "http", Host: "example.com", User: url.User("user")}},
+		},
+		{
+			name: "unbracketed ipv6",
+			req:  &http.Request{Method: http.MethodGet, Host: "2001:db8::1", URL: &url.URL{Path: "/"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got, err := httpProxyTarget(tt.req); err == nil {
+				t.Fatalf("httpProxyTarget = %q, want error", got)
+			}
+		})
+	}
+}
+
+func TestHandleHTTPRejectsMalformedProxyTarget(t *testing.T) {
+	resp := handleHTTPResponse(t, "GET / HTTP/1.1\r\nHost: example.com:bad\r\n\r\n", &ProxyConfig{})
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("HTTP status = %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
 func TestSmuxOpenHeaderRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeSmuxOpenHeader(&buf, streamKindTCP, IPStrategyPv4Pv6, "example.com:443"); err != nil {
@@ -2396,6 +2487,7 @@ func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 		{name: "nonzero reserved low", raw: []byte{0, 1, 0, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "fragmented", raw: []byte{0, 0, 1, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
+		{name: "empty domain", raw: []byte{0, 0, 0, 3, 0, 0, 53}},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
 		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
@@ -2420,6 +2512,7 @@ func TestSOCKS5UDPRespMalformed(t *testing.T) {
 		{name: "nonzero reserved low", raw: []byte{0, 1, 0, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "fragmented", raw: []byte{0, 0, 1, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
+		{name: "empty domain", raw: []byte{0, 0, 0, 3, 0, 0, 53}},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
 		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
@@ -2495,6 +2588,12 @@ func TestUDPAssociationHandleUDPResponseRejectsInvalidPort(t *testing.T) {
 func TestBuildSOCKS5UDPPacketRejectsOversizedDomain(t *testing.T) {
 	if _, err := buildSOCKS5UDPPacket(strings.Repeat("x", 256), 53, nil); err == nil {
 		t.Fatal("buildSOCKS5UDPPacket accepted oversized domain")
+	}
+}
+
+func TestBuildSOCKS5UDPPacketRejectsEmptyHost(t *testing.T) {
+	if _, err := buildSOCKS5UDPPacket("", 53, nil); err == nil {
+		t.Fatal("buildSOCKS5UDPPacket accepted empty host")
 	}
 }
 
