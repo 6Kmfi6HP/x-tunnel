@@ -718,6 +718,7 @@ type startupConfig struct {
 	ServerListen string
 	ServerScheme string
 	TargetIPs    []string
+	IPStrategy   byte
 	SourceCIDRs  []*net.IPNet
 	TargetPolicy *TargetPolicy
 	SOCKS5Config *SOCKS5Config
@@ -841,6 +842,10 @@ func validateStartupConfig() (*startupConfig, error) {
 			return nil, fmt.Errorf("-ip 参数无效 %q: %w", targetIP, err)
 		}
 	}
+	ipStrategyValue, err := parseIPStrategyStrict(ips)
+	if err != nil {
+		return nil, fmt.Errorf("-ips 参数无效: %w", err)
+	}
 	listeners, isServer, serverListen, serverScheme, err := classifyListeners(listenAddr)
 	if err != nil {
 		return nil, err
@@ -854,6 +859,7 @@ func validateStartupConfig() (*startupConfig, error) {
 		ServerListen: serverListen,
 		ServerScheme: serverScheme,
 		TargetIPs:    targetIPs,
+		IPStrategy:   ipStrategyValue,
 	}
 	if isServer {
 		sourceNets, err := parseSourceCIDRs(cidrs)
@@ -903,7 +909,7 @@ func main() {
 		go runMetricsServer(ctx, metricsAddr)
 	}
 
-	ipStrategy = parseIPStrategy(ips)
+	ipStrategy = startup.IPStrategy
 	if ips != "" {
 		log.Printf("[客户端] IP 访问策略: %s (code: %d)", ips, ipStrategy)
 	}
@@ -994,18 +1000,28 @@ func main() {
 }
 
 func parseIPStrategy(s string) byte {
+	strategy, err := parseIPStrategyStrict(s)
+	if err != nil {
+		return IPStrategyDefault
+	}
+	return strategy
+}
+
+func parseIPStrategyStrict(s string) (byte, error) {
 	s = strings.ReplaceAll(strings.TrimSpace(s), " ", "")
 	switch s {
+	case "":
+		return IPStrategyDefault, nil
 	case "4":
-		return IPStrategyIPv4Only
+		return IPStrategyIPv4Only, nil
 	case "6":
-		return IPStrategyIPv6Only
+		return IPStrategyIPv6Only, nil
 	case "4,6":
-		return IPStrategyPv4Pv6
+		return IPStrategyPv4Pv6, nil
 	case "6,4":
-		return IPStrategyPv6Pv4
+		return IPStrategyPv6Pv4, nil
 	default:
-		return IPStrategyDefault
+		return IPStrategyDefault, fmt.Errorf("仅支持空值、4、6、4,6 或 6,4")
 	}
 }
 

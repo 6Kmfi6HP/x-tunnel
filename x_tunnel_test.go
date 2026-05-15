@@ -41,6 +41,30 @@ func TestParseIPStrategy(t *testing.T) {
 	}
 }
 
+func TestParseIPStrategyStrict(t *testing.T) {
+	valid := map[string]byte{
+		"":       IPStrategyDefault,
+		"4":      IPStrategyIPv4Only,
+		"6":      IPStrategyIPv6Only,
+		"4,6":    IPStrategyPv4Pv6,
+		" 6, 4 ": IPStrategyPv6Pv4,
+	}
+	for in, want := range valid {
+		got, err := parseIPStrategyStrict(in)
+		if err != nil {
+			t.Fatalf("parseIPStrategyStrict(%q) returned error: %v", in, err)
+		}
+		if got != want {
+			t.Fatalf("parseIPStrategyStrict(%q) = %d, want %d", in, got, want)
+		}
+	}
+	for _, in := range []string{"7", "4,4", "4,6,6", "ipv4"} {
+		if _, err := parseIPStrategyStrict(in); err == nil {
+			t.Fatalf("parseIPStrategyStrict(%q) accepted invalid strategy", in)
+		}
+	}
+}
+
 func TestBaseReconnectDelay(t *testing.T) {
 	oldCfg := cfg
 	defer func() { cfg = oldCfg }()
@@ -804,6 +828,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 	oldAllowHosts, oldDenyHosts := targetAllowHosts, targetDenyHosts
 	oldMaxClients, oldMaxStreams := maxClientSessions, maxStreamsPerClient
 	oldConnections, oldInsecure, oldFallback := connectionNum, insecure, fallback
+	oldIPS := ips
 
 	cfg = validTestGlobalConfig()
 	listenAddr = "socks5://127.0.0.1:11080"
@@ -817,6 +842,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 	targetAllowHosts, targetDenyHosts = "", ""
 	maxClientSessions, maxStreamsPerClient = 0, 0
 	connectionNum, insecure, fallback = 1, false, false
+	ips = ""
 
 	return func() {
 		cfg = oldCfg
@@ -829,6 +855,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 		targetAllowHosts, targetDenyHosts = oldAllowHosts, oldDenyHosts
 		maxClientSessions, maxStreamsPerClient = oldMaxClients, oldMaxStreams
 		connectionNum, insecure, fallback = oldConnections, oldInsecure, oldFallback
+		ips = oldIPS
 	}
 }
 
@@ -849,11 +876,12 @@ func TestValidateStartupConfigValidModes(t *testing.T) {
 	restore := withValidStartupGlobals(t)
 	defer restore()
 
+	ips = "6,4"
 	startup, err := validateStartupConfig()
 	if err != nil {
 		t.Fatalf("validateStartupConfig client returned error: %v", err)
 	}
-	if startup.IsServer || startup.Client.ForwardScheme != "ws" || len(startup.Listeners) != 1 {
+	if startup.IsServer || startup.Client.ForwardScheme != "ws" || len(startup.Listeners) != 1 || startup.IPStrategy != IPStrategyPv6Pv4 {
 		t.Fatalf("validateStartupConfig client = %#v", startup)
 	}
 
@@ -876,6 +904,7 @@ func TestValidateStartupConfigRejectsCommonErrors(t *testing.T) {
 	}{
 		{name: "bad metrics", setup: func() { metricsAddr = "127.0.0.1" }},
 		{name: "bad ip override", setup: func() { ipAddr = "example.com" }},
+		{name: "bad ip strategy", setup: func() { ips = "4,4" }},
 		{name: "missing client forward", setup: func() { forwardAddr = "" }},
 		{name: "bad forward scheme", setup: func() { forwardAddr = "http://127.0.0.1:18080/tunnel" }},
 		{name: "bad source cidr", setup: func() {

@@ -581,3 +581,16 @@ Verification:
 - `go test -run 'Test(ParseSourceCIDRs|ValidateStartupConfig|IntegrationSourceCIDRRejectionMetrics)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 34.6% of statements`.
+
+Post Phase 8 IP strategy startup validation:
+
+- [x] Add strict `-ips` parsing for startup validation while preserving permissive `parseIPStrategy` fallback behavior for legacy callers.
+- [x] Store the parsed IP strategy in startup config and reuse it in `main`.
+- [x] Reject invalid non-empty `-ips` values with unit coverage.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `go test -run 'Test(ParseIPStrategy|ValidateStartupConfig|ExampleConfigFilesLoad)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 34.8% of statements`.
