@@ -885,3 +885,17 @@ Verification:
 - `go test -run 'Test(HandleSOCKS5RejectsZeroConnectPort|HandleSOCKS5RejectsUnsupportedCommand|HandleSOCKS5RejectsMissing)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 44.7% of statements`.
+
+Post Phase 8 SOCKS5 unsupported address response:
+
+- [x] Return SOCKS5 status `0x08` for unsupported local SOCKS5 address types.
+- [x] Preserve existing IPv4/domain/IPv6 parsing behavior.
+- [x] Add focused unit coverage for unknown ATYP handling.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSOCKS5Rejects(UnsupportedAddressType|UnsupportedCommand|ZeroConnectPort|Missing)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 44.8% of statements`.

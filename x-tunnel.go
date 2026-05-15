@@ -3465,6 +3465,7 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 		}
 		target = net.IP(b).String()
 	default:
+		_, _ = c.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
 		return
 	}
 	pb := make([]byte, 2)
