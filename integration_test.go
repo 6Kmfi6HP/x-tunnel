@@ -106,6 +106,7 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	defer stopProcess(badClient)
 	waitLogContains(t, ctx, badClientLog, "认证失败")
 	waitLogContains(t, ctx, serverLog, "Token 认证失败")
+	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_auth_rejections_total 1")
 }
 
 func TestIntegrationLocalWSSFallback(t *testing.T) {
@@ -240,6 +241,7 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	}
 
 	wsAddr := freeTCPAddr(t)
+	metricsAddr := freeTCPAddr(t)
 	firstSocksAddr := freeTCPAddr(t)
 	secondSocksAddr := freeTCPAddr(t)
 	serverLog := filepath.Join(t.TempDir(), "max-clients-server.log")
@@ -251,9 +253,11 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 		"-token", "max-clients-token",
 		"-cidr", "127.0.0.1/32",
 		"-max-clients", "1",
+		"-metrics", metricsAddr,
 	)
 	defer stopProcess(server)
 	waitTCP(t, ctx, wsAddr)
+	waitTCP(t, ctx, metricsAddr)
 
 	firstClient := startXTunnel(t, ctx, binPath, firstClientLog,
 		"-l", "socks5://"+firstSocksAddr,
@@ -275,6 +279,7 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	waitTCP(t, ctx, secondSocksAddr)
 	waitLogContains(t, ctx, serverLog, "拒绝客户端会话")
 	waitLogContains(t, ctx, secondClientLog, "协议协商失败")
+	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_client_session_rejections_total 1")
 }
 
 func startXTunnel(t *testing.T, ctx context.Context, binPath, logPath string, args ...string) *exec.Cmd {
@@ -656,11 +661,23 @@ func assertMetrics(t *testing.T, got string) {
 		"x_tunnel_server_streams_total",
 		"x_tunnel_udp_associations_total",
 		"x_tunnel_client_reconnects_total",
+		"x_tunnel_server_source_rejections_total",
+		"x_tunnel_server_auth_rejections_total",
+		"x_tunnel_server_client_session_rejections_total",
+		"x_tunnel_server_stream_rejections_total",
+		"x_tunnel_server_target_rejections_total",
 		"x_tunnel_server_sessions",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metrics missing %q:\n%s", want, got)
 		}
+	}
+}
+
+func assertMetricsContains(t *testing.T, got, want string) {
+	t.Helper()
+	if !strings.Contains(got, want) {
+		t.Fatalf("metrics missing %q:\n%s", want, got)
 	}
 }
 

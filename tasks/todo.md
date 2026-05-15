@@ -412,5 +412,6 @@ Post Phase 8 rejection metrics:
 Verification:
 
 - `go test -run TestWriteMetrics -count=1 ./...`: pass.
+- `go test -run 'Test(LocalTunnelIntegration|IntegrationMaxClientsRejectsNewClient|WriteMetrics)' -count=1 ./...`: pass; integration assertions verify token and client-session rejection counters through `/metrics`.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 28.4% of statements`.
