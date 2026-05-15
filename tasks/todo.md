@@ -355,6 +355,7 @@ Post Phase 8 host target policies:
 Post Phase 8 DNS query hardening:
 
 - Hardened DNS query construction for ECH lookups so invalid domains, empty labels, illegal label characters, labels over 63 bytes, and domains over 253 bytes are rejected before encoding.
+- DNS query construction now normalizes names to lowercase and rejects labels with leading/trailing hyphens, spaces, underscores, and non-ASCII characters.
 - Updated UDP DNS and DoH paths to return query construction errors instead of silently truncating label lengths.
 - Added unit coverage for valid trailing-dot normalization and invalid DNS names.
 - Verified focused DNS test with `go test -run TestBuildDNSQueryValidatesDomain -count=1 ./...`: pass.
