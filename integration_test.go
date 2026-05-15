@@ -298,6 +298,7 @@ func TestIntegrationTCPStatusRejectsBlockedTarget(t *testing.T) {
 
 	wsAddr := freeTCPAddr(t)
 	socksAddr := freeTCPAddr(t)
+	httpProxyAddr := freeTCPAddr(t)
 	metricsAddr := freeTCPAddr(t)
 	serverLog := filepath.Join(t.TempDir(), "tcp-status-server.log")
 	clientLog := filepath.Join(t.TempDir(), "tcp-status-client.log")
@@ -314,20 +315,25 @@ func TestIntegrationTCPStatusRejectsBlockedTarget(t *testing.T) {
 	waitTCP(t, ctx, metricsAddr)
 
 	client := startXTunnel(t, ctx, binPath, clientLog,
-		"-l", "socks5://"+socksAddr,
+		"-l", "socks5://"+socksAddr+",http://"+httpProxyAddr,
 		"-f", "ws://"+wsAddr+"/tunnel",
 		"-token", "tcp-status-token",
 		"-n", "1",
 	)
 	defer stopProcess(client)
 	waitTCP(t, ctx, socksAddr)
+	waitTCP(t, ctx, httpProxyAddr)
 	waitLogContains(t, ctx, clientLog, "协议协商成功")
 
 	if got := socks5ConnectReplyCode(t, socksAddr, "127.0.0.1:1"); got == 0x00 {
 		t.Fatal("SOCKS5 connect unexpectedly succeeded for blocked target")
 	}
-	waitLogContains(t, ctx, serverLog, "TCP 拒绝")
 	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total 1")
+	if got := fetchViaHTTPProxyStatus(t, httpProxyAddr, "http://127.0.0.1:1/blocked"); got != http.StatusBadGateway {
+		t.Fatalf("HTTP proxy blocked target status = %d, want %d", got, http.StatusBadGateway)
+	}
+	waitLogContains(t, ctx, serverLog, "TCP 拒绝")
+	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total 2")
 }
 
 func startXTunnel(t *testing.T, ctx context.Context, binPath, logPath string, args ...string) *exec.Cmd {
@@ -437,6 +443,24 @@ func fetchViaHTTPProxy(t *testing.T, proxyAddr, rawURL string) string {
 	}
 	defer resp.Body.Close()
 	return readOKBody(t, resp)
+}
+
+func fetchViaHTTPProxyStatus(t *testing.T, proxyAddr, rawURL string) int {
+	t.Helper()
+	proxyURL, err := url.Parse("http://" + proxyAddr)
+	if err != nil {
+		t.Fatalf("parse proxy URL: %v", err)
+	}
+	client := &http.Client{
+		Timeout:   integrationIOTimeout,
+		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+	}
+	resp, err := client.Get(rawURL)
+	if err != nil {
+		t.Fatalf("proxy GET %s: %v", rawURL, err)
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode
 }
 
 func fetchViaHTTPConnect(t *testing.T, proxyAddr, targetAddr, path string) string {

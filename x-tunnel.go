@@ -3591,9 +3591,7 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	stream, _, decision, err := echPool.openTCPStream(target)
 	if err != nil {
 		log.Printf("[客户端] %s HTTP 打开失败 %s: %v", clientSourceAddr(c), target, err)
-		if req.Method == "CONNECT" {
-			_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\n\r\n"))
-		}
+		_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
 		return
 	}
 	if req.Method == "CONNECT" {

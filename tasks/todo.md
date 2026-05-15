@@ -444,3 +444,16 @@ Verification:
 - `go test -run TestProtocolConstants -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 29.3% of statements`.
+
+Post Phase 8 HTTP proxy TCP failure responses:
+
+- [x] Return an explicit HTTP 502 for ordinary HTTP proxy requests when remote TCP open fails.
+- [x] Keep HTTP CONNECT failure behavior returning 502 and SOCKS5 CONNECT returning a SOCKS5 error code.
+- [x] Add integration coverage for a target-policy-blocked HTTP proxy request.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `go test -run TestIntegrationTCPStatusRejectsBlockedTarget -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 29.3% of statements`.
