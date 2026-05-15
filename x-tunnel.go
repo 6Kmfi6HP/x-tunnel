@@ -575,6 +575,22 @@ func splitCommaList(raw string) []string {
 	return out
 }
 
+func parseUDPBlockPorts(raw string) (map[int]struct{}, error) {
+	parts := splitCommaList(raw)
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	ports := make(map[int]struct{}, len(parts))
+	for _, part := range parts {
+		port, err := strconv.Atoi(part)
+		if err != nil || port <= 0 || port > 65535 {
+			return nil, fmt.Errorf("端口 %q 必须是 1-65535 之间的整数", part)
+		}
+		ports[port] = struct{}{}
+	}
+	return ports, nil
+}
+
 func validateToken(value string) error {
 	if value == "" {
 		return nil
@@ -816,20 +832,10 @@ func main() {
 		}
 	}
 
-	if udpBlockPortsStr != "" {
-		udpBlockPorts = make(map[int]struct{})
-		parts := strings.Split(udpBlockPortsStr, ",")
-		for _, p := range parts {
-			pp := strings.TrimSpace(p)
-			if pp == "" {
-				continue
-			}
-			var port int
-			_, _ = fmt.Sscanf(pp, "%d", &port)
-			if port > 0 && port < 65536 {
-				udpBlockPorts[port] = struct{}{}
-			}
-		}
+	var blockErr error
+	udpBlockPorts, blockErr = parseUDPBlockPorts(udpBlockPortsStr)
+	if blockErr != nil {
+		log.Fatalf("[客户端] -block 参数无效: %v", blockErr)
 	}
 
 	clientID = uuid.NewString()

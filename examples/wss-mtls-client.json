@@ -1,0 +1,17 @@
+{
+  "listen": "socks5://127.0.0.1:11080,http://127.0.0.1:18081",
+  "forward": "wss://x-tunnel.example.com/tunnel",
+  "token": "replace-with-a-long-random-token",
+  "client-cert": "/etc/x-tunnel/client.pem",
+  "client-key": "/etc/x-tunnel/client-key.pem",
+  "connections": 2,
+  "fallback": true,
+  "dial_timeout": "5s",
+  "ws_handshake_timeout": "5s",
+  "reconnect_delay": "1s",
+  "reconnect_max_delay": "30s",
+  "reconnect_jitter": "500ms",
+  "dns_timeout": "3s",
+  "ech_retry_delay": "2s",
+  "shutdown_timeout": "10s"
+}

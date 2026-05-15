@@ -1,0 +1,11 @@
+{
+  "listen": "socks5://127.0.0.1:11080,http://127.0.0.1:18081,tcp://127.0.0.1:12000/127.0.0.1:19080",
+  "forward": "ws://127.0.0.1:18080/tunnel",
+  "token": "local-test-token",
+  "connections": 1,
+  "dial_timeout": "3s",
+  "reconnect_delay": "1s",
+  "reconnect_max_delay": "10s",
+  "reconnect_jitter": "250ms",
+  "rtt_timeout": "2s"
+}

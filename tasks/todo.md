@@ -470,3 +470,31 @@ Verification:
 - `go test -run 'Test(SmuxOpenHeader|ProtocolHello|TCPOpenStatus|Chunk|UDPReply)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 29.6% of statements`.
+
+Post Phase 8 config examples:
+
+- [x] Add example JSON configs for local server/client, hardened WSS server, and WSS mTLS client.
+- [x] Document how to use examples with `-config`.
+- [x] Add test coverage that every example JSON loads and validates common config constraints.
+- [x] Run focused example tests, full tests, coverage, and commit.
+
+Verification:
+
+- `go test -run TestExampleConfigFilesLoad -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 30.4% of statements`.
+
+Post Phase 8 UDP block port validation:
+
+- [x] Replace silent `-block` parsing with strict comma-separated port validation.
+- [x] Reject non-numeric, partial numeric, zero, and out-of-range ports at startup.
+- [x] Preserve empty `-block ""` behavior as no UDP port block list.
+- [x] Add unit coverage, docs, full verification, and commit.
+
+Verification:
+
+- `go test -run 'Test(ParseUDPBlockPorts|LoadConfigFileAppliesUnsetFlags)' -count=1 ./...`: pass.
+- `go run . -h`: pass and includes `-block`.
+- `go run . -l socks5://127.0.0.1:12345 -f ws://127.0.0.1:1/tunnel -block 443abc`: exits non-zero with `-block 参数无效`.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 30.4% of statements`.

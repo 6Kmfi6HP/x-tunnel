@@ -357,6 +357,37 @@ func TestValidateGlobalConfig(t *testing.T) {
 	}
 }
 
+func TestParseUDPBlockPorts(t *testing.T) {
+	ports, err := parseUDPBlockPorts("443, 8443,443")
+	if err != nil {
+		t.Fatalf("parseUDPBlockPorts returned error: %v", err)
+	}
+	for _, port := range []int{443, 8443} {
+		if _, ok := ports[port]; !ok {
+			t.Fatalf("parseUDPBlockPorts missing port %d", port)
+		}
+	}
+	if len(ports) != 2 {
+		t.Fatalf("parseUDPBlockPorts size = %d, want 2", len(ports))
+	}
+
+	ports, err = parseUDPBlockPorts("")
+	if err != nil {
+		t.Fatalf("parseUDPBlockPorts empty returned error: %v", err)
+	}
+	if ports != nil {
+		t.Fatalf("parseUDPBlockPorts empty = %#v, want nil", ports)
+	}
+}
+
+func TestParseUDPBlockPortsRejectsInvalid(t *testing.T) {
+	for _, raw := range []string{"0", "65536", "abc", "443abc", "53, bad"} {
+		if _, err := parseUDPBlockPorts(raw); err == nil {
+			t.Fatalf("parseUDPBlockPorts(%q) accepted invalid input", raw)
+		}
+	}
+}
+
 func TestBuildDNSQueryValidatesDomain(t *testing.T) {
 	query, err := buildDNSQuery("Example.COM.", typeHTTPS)
 	if err != nil {
@@ -1300,5 +1331,81 @@ func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 func TestBuildSOCKS5UDPPacketRejectsOversizedDomain(t *testing.T) {
 	if _, err := buildSOCKS5UDPPacket(strings.Repeat("x", 256), 53, nil); err == nil {
 		t.Fatal("buildSOCKS5UDPPacket accepted oversized domain")
+	}
+}
+
+func TestExampleConfigFilesLoad(t *testing.T) {
+	paths, err := filepath.Glob(filepath.Join("examples", "*.json"))
+	if err != nil {
+		t.Fatalf("glob examples: %v", err)
+	}
+	if len(paths) == 0 {
+		t.Fatal("no example config files found")
+	}
+
+	oldCfg := cfg
+	oldListen, oldForward, oldToken := listenAddr, forwardAddr, token
+	oldIP, oldBlock := ipAddr, udpBlockPortsStr
+	oldCert, oldKey := certFile, keyFile
+	oldClientCA, oldClientCert, oldClientKey := clientCAFile, clientCertFile, clientKeyFile
+	oldMetrics, oldCIDR := metricsAddr, cidrs
+	oldAllow, oldDeny := targetAllowCIDRs, targetDenyCIDRs
+	oldAllowHosts, oldDenyHosts := targetAllowHosts, targetDenyHosts
+	oldMaxClients, oldMaxStreams := maxClientSessions, maxStreamsPerClient
+	oldDNS, oldECH, oldIPS := dnsServer, echDomain, ips
+	oldConnections, oldInsecure, oldFallback := connectionNum, insecure, fallback
+	defer func() {
+		cfg = oldCfg
+		listenAddr, forwardAddr, token = oldListen, oldForward, oldToken
+		ipAddr, udpBlockPortsStr = oldIP, oldBlock
+		certFile, keyFile = oldCert, oldKey
+		clientCAFile, clientCertFile, clientKeyFile = oldClientCA, oldClientCert, oldClientKey
+		metricsAddr, cidrs = oldMetrics, oldCIDR
+		targetAllowCIDRs, targetDenyCIDRs = oldAllow, oldDeny
+		targetAllowHosts, targetDenyHosts = oldAllowHosts, oldDenyHosts
+		maxClientSessions, maxStreamsPerClient = oldMaxClients, oldMaxStreams
+		dnsServer, echDomain, ips = oldDNS, oldECH, oldIPS
+		connectionNum, insecure, fallback = oldConnections, oldInsecure, oldFallback
+	}()
+
+	for _, path := range paths {
+		t.Run(filepath.Base(path), func(t *testing.T) {
+			cfg = oldCfg
+			listenAddr, forwardAddr, token = "", "", ""
+			ipAddr, udpBlockPortsStr = "", ""
+			certFile, keyFile = "", ""
+			clientCAFile, clientCertFile, clientKeyFile = "", "", ""
+			metricsAddr, cidrs = "", "0.0.0.0/0,::/0"
+			targetAllowCIDRs, targetDenyCIDRs = "", ""
+			targetAllowHosts, targetDenyHosts = "", ""
+			maxClientSessions, maxStreamsPerClient = 0, 0
+			dnsServer, echDomain, ips = "https://doh.pub/dns-query", "cloudflare-ech.com", ""
+			connectionNum, insecure, fallback = 3, false, false
+
+			if err := loadConfigFile(path, map[string]bool{}); err != nil {
+				t.Fatalf("loadConfigFile(%s) returned error: %v", path, err)
+			}
+			if listenAddr == "" {
+				t.Fatalf("example %s did not set listen", path)
+			}
+			for _, rule := range splitCommaList(listenAddr) {
+				if err := validateListenRule(rule); err != nil {
+					t.Fatalf("validateListenRule(%q): %v", rule, err)
+				}
+			}
+			if err := validateGlobalConfig(); err != nil {
+				t.Fatalf("validateGlobalConfig(%s): %v", path, err)
+			}
+			if metricsAddr != "" {
+				if err := validateListenHostPort(metricsAddr); err != nil {
+					t.Fatalf("validate metrics address %q: %v", metricsAddr, err)
+				}
+			}
+			if token != "" {
+				if err := validateToken(token); err != nil {
+					t.Fatalf("validateToken(%s): %v", path, err)
+				}
+			}
+		})
 	}
 }

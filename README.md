@@ -118,6 +118,7 @@ Metrics include session/stream counters plus rejection counters for source CIDR,
 Use `-config` with JSON when command lines get long. Explicit flags override config file values.
 Most keys mirror flag names; `-n` is `connections`, and target filter keys accept either
 hyphen or underscore forms, for example `allow-target` or `allow_target`.
+See [examples](examples) for local, hardened server, and WSS mTLS templates.
 
 ```json
 {
@@ -143,6 +144,8 @@ hyphen or underscore forms, for example `allow-target` or `allow_target`.
 Operational timeouts can be tuned with duration flags such as `-dial-timeout`,
 `-ws-handshake-timeout`, `-reconnect-delay`, and `-shutdown-timeout`. JSON config
 uses underscore keys, for example `"dial_timeout": "5s"`.
+
+UDP block ports from `-block` must be comma-separated integers in `1-65535`; invalid entries fail startup instead of being ignored.
 
 ## Troubleshooting
 

@@ -1,0 +1,18 @@
+{
+  "listen": "wss://0.0.0.0:443/tunnel",
+  "cert": "/etc/x-tunnel/fullchain.pem",
+  "key": "/etc/x-tunnel/privkey.pem",
+  "token": "replace-with-a-long-random-token",
+  "cidr": "203.0.113.0/24",
+  "allow-target": "10.0.0.0/8,192.168.0.0/16",
+  "deny-target": "10.0.9.0/24",
+  "allow-host": "api.internal.example.com,*.svc.internal.example.com",
+  "deny-host": "blocked.internal.example.com",
+  "metrics": "127.0.0.1:9090",
+  "max_clients": 64,
+  "max_streams": 256,
+  "dial_timeout": "5s",
+  "ws_handshake_timeout": "5s",
+  "udp_read_timeout": "1s",
+  "shutdown_timeout": "10s"
+}
