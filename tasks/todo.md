@@ -284,9 +284,11 @@ Post Phase 8 config:
 - Explicit CLI flags override config file values.
 - Unknown config fields are rejected with `DisallowUnknownFields`.
 - Config rejects trailing JSON values and duplicate `allow_target`/`allow-target` aliases.
+- Supported both `allow-target`/`deny-target` and `allow_target`/`deny_target` in JSON config.
 - Documented config usage in `README.md`.
 - Verified with `go test ./...`: pass.
-- Verified with `go test -cover ./...`: pass, `coverage: 17.5% of statements`.
+- Verified with `go test -cover ./...`: pass, `coverage: 18.1% of statements`.
+- Verified CLI help includes `-config` with `go run . -h`.
 - Verified real config smoke: `config_smoke=pass hash=9ca571ad702f4922cc9f5d5a07bf231c53298b0bfea8a7e7fed8ef0ac23f2b56 tcp_size=77336`.
 
 Post Phase 8 release packaging:
@@ -295,5 +297,6 @@ Post Phase 8 release packaging:
 - Release script injects version metadata and writes `SHA256SUMS`.
 - Documented release script in `README.md`.
 - Verified release script with `TARGETS=linux/amd64`, producing `x-tunnel_0.1.0_linux_amd64` and `SHA256SUMS`.
+- Verified release script with `TARGETS=darwin/arm64`, producing `x-tunnel_0.1.0_darwin_arm64`, `SHA256SUMS`, and version output `x-tunnel version=0.1.0 commit=testcommit build=2026-05-16T00:00:00Z`.
 - Verified with `go test ./...`: pass.
 - Verified with `go test -cover ./...`: pass, `coverage: 18.1% of statements`.
