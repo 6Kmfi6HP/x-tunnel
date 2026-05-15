@@ -1219,6 +1219,43 @@ func TestHandleSOCKS5UserPassAuthRejectsShortRequest(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5RejectsMissingUserPassMethod(t *testing.T) {
+	got := socks5MethodSelection(t, &ProxyConfig{Username: "user", Password: "pass"}, []byte{0x00})
+	if !bytes.Equal(got, []byte{0x05, 0xff}) {
+		t.Fatalf("SOCKS5 method selection = %v, want [5 255]", got)
+	}
+}
+
+func TestHandleSOCKS5RejectsMissingNoAuthMethod(t *testing.T) {
+	got := socks5MethodSelection(t, &ProxyConfig{}, []byte{0x02})
+	if !bytes.Equal(got, []byte{0x05, 0xff}) {
+		t.Fatalf("SOCKS5 method selection = %v, want [5 255]", got)
+	}
+}
+
+func socks5MethodSelection(t *testing.T, cfgp *ProxyConfig, methods []byte) []byte {
+	t.Helper()
+	if len(methods) > 255 {
+		t.Fatalf("too many methods: %d", len(methods))
+	}
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	go handleSOCKS5(server, cfgp)
+	greeting := append([]byte{0x05, byte(len(methods))}, methods...)
+	if _, err := client.Write(greeting); err != nil {
+		t.Fatalf("write SOCKS5 greeting: %v", err)
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read SOCKS5 method selection: %v", err)
+	}
+	return resp
+}
+
 func TestParseAuthAndAddr(t *testing.T) {
 	tests := []struct {
 		name     string

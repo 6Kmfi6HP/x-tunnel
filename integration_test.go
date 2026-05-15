@@ -185,8 +185,8 @@ func TestIntegrationLocalProxyAuth(t *testing.T) {
 	assertBody(t, "http proxy auth", fetchViaHTTPProxyWithAuth(t, httpProxyAddr, "http://"+targetAddr+"/payload", "user", "pass"), body)
 	assertBody(t, "http connect auth", fetchViaHTTPConnectWithAuth(t, httpProxyAddr, targetAddr, "/payload", "user", "pass"), body)
 
-	if got := socks5SelectedMethod(t, socksAddr, []byte{0x00}); got == 0x00 {
-		t.Fatalf("SOCKS5 selected no-auth method on authenticated listener")
+	if got := socks5SelectedMethod(t, socksAddr, []byte{0x00}); got != 0xff {
+		t.Fatalf("SOCKS5 selected method without username/password support = 0x%02x, want 0xff", got)
 	}
 	if got := socks5UserPassAuthStatus(t, socksAddr, "user", "wrong"); got != 0x01 {
 		t.Fatalf("SOCKS5 wrong auth status = %d, want 1", got)

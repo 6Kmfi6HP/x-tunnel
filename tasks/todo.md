@@ -759,3 +759,17 @@ Verification:
 - `go test -run TestIntegrationUpstreamSOCKS5Auth -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 39.3% of statements`.
+
+Post Phase 8 local SOCKS5 method negotiation:
+
+- [x] Reject authenticated listeners when the client does not offer username/password method.
+- [x] Reject unauthenticated listeners when the client does not offer no-auth method.
+- [x] Add unit coverage for method rejection and update integration assertions.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(HandleSOCKS5RejectsMissing|HandleSOCKS5UserPassAuthRejectsShortRequest|IntegrationLocalProxyAuth)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 39.7% of statements`.

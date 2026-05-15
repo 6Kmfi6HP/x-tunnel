@@ -3379,11 +3379,19 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 		return
 	}
 	if cfgp.Username != "" {
+		if !bytes.Contains(methods, []byte{0x02}) {
+			_, _ = c.Write([]byte{0x05, 0xff})
+			return
+		}
 		_, _ = c.Write([]byte{0x05, 0x02})
 		if err := handleSOCKS5UserPassAuth(c, cfgp); err != nil {
 			return
 		}
 	} else {
+		if !bytes.Contains(methods, []byte{0x00}) {
+			_, _ = c.Write([]byte{0x05, 0xff})
+			return
+		}
 		_, _ = c.Write([]byte{0x05, 0x00})
 	}
 
