@@ -511,6 +511,21 @@ Verification:
   - `BenchmarkTCPOpenStatusRoundTrip-8`: `112.2 ns/op`.
   - `BenchmarkTargetPolicyAllowsCIDR-8`: `66.66 ns/op`.
   - `BenchmarkTargetPolicyAllowsHost-8`: `79.98 ns/op`.
-  - `BenchmarkBuildDNSQuery-8`: `110.9 ns/op`.
+- `BenchmarkBuildDNSQuery-8`: `110.9 ns/op`.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 30.4% of statements`.
+
+Post Phase 8 local proxy auth parsing:
+
+- [x] Require local SOCKS5/HTTP listener auth to use complete `user:pass@host:port` syntax.
+- [x] Reject incomplete auth instead of silently running without auth.
+- [x] Make HTTP listener handle auth parse errors like SOCKS5 listener.
+- [x] Add unit coverage, startup smoke, full verification, and commit.
+
+Verification:
+
+- `go test -run 'TestParseAuthAndAddr' -count=1 ./...`: pass.
+- `go run . -l http://user@127.0.0.1:12346 -f ws://127.0.0.1:1/tunnel`: exits non-zero with `HTTP地址解析失败`.
+- `go run . -l socks5://user@127.0.0.1:12347 -f ws://127.0.0.1:1/tunnel`: exits non-zero with `SOCKS5地址解析失败`.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 30.5% of statements`.

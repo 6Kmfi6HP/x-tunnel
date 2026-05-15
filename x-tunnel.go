@@ -3111,15 +3111,19 @@ func parseAuthAndAddr(full string) (string, string, string, error) {
 	u, p, h := "", "", full
 	if strings.Contains(full, "@") {
 		parts := strings.SplitN(full, "@", 2)
-		if len(parts) != 2 {
-			return "", "", "", fmt.Errorf("格式错误")
-		}
 		auth := parts[0]
-		if strings.Contains(auth, ":") {
-			ap := strings.SplitN(auth, ":", 2)
-			u, p = ap[0], ap[1]
+		h = strings.TrimSpace(parts[1])
+		if auth == "" || h == "" || !strings.Contains(auth, ":") {
+			return "", "", "", fmt.Errorf("认证格式必须是 user:pass@host:port")
 		}
-		h = parts[1]
+		ap := strings.SplitN(auth, ":", 2)
+		u, p = ap[0], ap[1]
+		if u == "" || p == "" {
+			return "", "", "", fmt.Errorf("用户名和密码不能为空")
+		}
+	}
+	if strings.TrimSpace(h) == "" {
+		return "", "", "", fmt.Errorf("地址不能为空")
 	}
 	return h, u, p, nil
 }
@@ -3526,7 +3530,10 @@ func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
 }
 
 func runHTTPListener(ctx context.Context, addr string) {
-	h, u, p, _ := parseAuthAndAddr(strings.TrimPrefix(addr, "http://"))
+	h, u, p, err := parseAuthAndAddr(strings.TrimPrefix(addr, "http://"))
+	if err != nil {
+		log.Fatalf("[客户端] HTTP地址解析失败: %v", err)
+	}
 	l, err := net.Listen("tcp", h)
 	if err != nil {
 		log.Fatalf("[客户端] HTTP监听失败: %v", err)

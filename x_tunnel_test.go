@@ -893,6 +893,14 @@ func TestParseAuthAndAddr(t *testing.T) {
 	}
 }
 
+func TestParseAuthAndAddrRejectsIncompleteAuth(t *testing.T) {
+	for _, in := range []string{"user@127.0.0.1:8080", "user:@127.0.0.1:8080", ":pass@127.0.0.1:8080", "user:pass@", ""} {
+		if _, _, _, err := parseAuthAndAddr(in); err == nil {
+			t.Fatalf("parseAuthAndAddr(%q) accepted invalid auth/listen address", in)
+		}
+	}
+}
+
 func TestSmuxOpenHeaderRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeSmuxOpenHeader(&buf, streamKindTCP, IPStrategyPv4Pv6, "example.com:443"); err != nil {
