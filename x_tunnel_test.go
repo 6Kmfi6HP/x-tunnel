@@ -761,6 +761,21 @@ func TestValidateClientStartupConfig(t *testing.T) {
 	}
 }
 
+func TestParseSourceCIDRs(t *testing.T) {
+	nets, err := parseSourceCIDRs("127.0.0.0/8, ::1/128")
+	if err != nil {
+		t.Fatalf("parseSourceCIDRs returned error: %v", err)
+	}
+	if len(nets) != 2 {
+		t.Fatalf("parseSourceCIDRs returned %d networks, want 2", len(nets))
+	}
+	for _, raw := range []string{"", "127.0.0.0/8,", "not-a-cidr"} {
+		if _, err := parseSourceCIDRs(raw); err == nil {
+			t.Fatalf("parseSourceCIDRs(%q) accepted invalid source filter", raw)
+		}
+	}
+}
+
 func validTestGlobalConfig() GlobalConfig {
 	return GlobalConfig{
 		DialTimeout:        time.Second,
@@ -784,6 +799,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 	oldCert, oldKey := certFile, keyFile
 	oldClientCA, oldClientCert, oldClientKey := clientCAFile, clientCertFile, clientKeyFile
 	oldToken, oldMetrics := token, metricsAddr
+	oldCIDR := cidrs
 	oldAllow, oldDeny := targetAllowCIDRs, targetDenyCIDRs
 	oldAllowHosts, oldDenyHosts := targetAllowHosts, targetDenyHosts
 	oldMaxClients, oldMaxStreams := maxClientSessions, maxStreamsPerClient
@@ -796,6 +812,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 	certFile, keyFile = "", ""
 	clientCAFile, clientCertFile, clientKeyFile = "", "", ""
 	token, metricsAddr = "local-test-token", ""
+	cidrs = "0.0.0.0/0,::/0"
 	targetAllowCIDRs, targetDenyCIDRs = "", ""
 	targetAllowHosts, targetDenyHosts = "", ""
 	maxClientSessions, maxStreamsPerClient = 0, 0
@@ -807,6 +824,7 @@ func withValidStartupGlobals(t *testing.T) func() {
 		certFile, keyFile = oldCert, oldKey
 		clientCAFile, clientCertFile, clientKeyFile = oldClientCA, oldClientCert, oldClientKey
 		token, metricsAddr = oldToken, oldMetrics
+		cidrs = oldCIDR
 		targetAllowCIDRs, targetDenyCIDRs = oldAllow, oldDeny
 		targetAllowHosts, targetDenyHosts = oldAllowHosts, oldDenyHosts
 		maxClientSessions, maxStreamsPerClient = oldMaxClients, oldMaxStreams
@@ -846,7 +864,7 @@ func TestValidateStartupConfigValidModes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("validateStartupConfig server returned error: %v", err)
 	}
-	if !startup.IsServer || startup.ServerScheme != "ws" || startup.TargetPolicy == nil {
+	if !startup.IsServer || startup.ServerScheme != "ws" || startup.TargetPolicy == nil || len(startup.SourceCIDRs) == 0 {
 		t.Fatalf("validateStartupConfig server = %#v", startup)
 	}
 }
@@ -860,6 +878,11 @@ func TestValidateStartupConfigRejectsCommonErrors(t *testing.T) {
 		{name: "bad ip override", setup: func() { ipAddr = "example.com" }},
 		{name: "missing client forward", setup: func() { forwardAddr = "" }},
 		{name: "bad forward scheme", setup: func() { forwardAddr = "http://127.0.0.1:18080/tunnel" }},
+		{name: "bad source cidr", setup: func() {
+			listenAddr = "ws://127.0.0.1:18080/tunnel"
+			forwardAddr = ""
+			cidrs = "not-a-cidr"
+		}},
 		{name: "client cert on ws", setup: func() {
 			clientCertFile = "client.pem"
 			clientKeyFile = "client-key.pem"

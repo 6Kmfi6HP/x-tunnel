@@ -718,6 +718,7 @@ type startupConfig struct {
 	ServerListen string
 	ServerScheme string
 	TargetIPs    []string
+	SourceCIDRs  []*net.IPNet
 	TargetPolicy *TargetPolicy
 	SOCKS5Config *SOCKS5Config
 	Client       clientStartupConfig
@@ -855,10 +856,15 @@ func validateStartupConfig() (*startupConfig, error) {
 		TargetIPs:    targetIPs,
 	}
 	if isServer {
+		sourceNets, err := parseSourceCIDRs(cidrs)
+		if err != nil {
+			return nil, fmt.Errorf("source CIDR 配置无效: %w", err)
+		}
 		policy, socksConfig, err := validateServerStartupConfig(forwardAddr, targetAllowCIDRs, targetDenyCIDRs, targetAllowHosts, targetDenyHosts)
 		if err != nil {
 			return nil, err
 		}
+		startup.SourceCIDRs = sourceNets
 		startup.TargetPolicy = policy
 		startup.SOCKS5Config = socksConfig
 		return startup, nil
@@ -917,7 +923,7 @@ func main() {
 		} else {
 			log.Printf("[服务端] 直连模式（未配置SOCKS5代理）")
 		}
-		runWebSocketServer(ctx, startup.ServerListen)
+		runWebSocketServer(ctx, startup.ServerListen, startup.SourceCIDRs)
 		return
 	}
 
@@ -1032,6 +1038,25 @@ func parseCIDRList(raw string) ([]*net.IPNet, error) {
 		item := strings.TrimSpace(part)
 		if item == "" {
 			continue
+		}
+		_, n, err := net.ParseCIDR(item)
+		if err != nil {
+			return nil, fmt.Errorf("CIDR %q 解析失败: %w", item, err)
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
+}
+
+func parseSourceCIDRs(raw string) ([]*net.IPNet, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, fmt.Errorf("至少需要一个 CIDR")
+	}
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			return nil, fmt.Errorf("CIDR 不能为空")
 		}
 		_, n, err := net.ParseCIDR(item)
 		if err != nil {
@@ -2197,7 +2222,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	)
 }
 
-func runWebSocketServer(ctx context.Context, addr string) {
+func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		log.Fatalf("[服务端] WS 地址无效: %v", err)
@@ -2205,14 +2230,6 @@ func runWebSocketServer(ctx context.Context, addr string) {
 	path := u.Path
 	if path == "" {
 		path = "/"
-	}
-	var allowedNets []*net.IPNet
-	for _, cidr := range strings.Split(cidrs, ",") {
-		_, allowedNet, err := net.ParseCIDR(strings.TrimSpace(cidr))
-		if err != nil {
-			log.Fatalf("[服务端] CIDR 解析失败: %v", err)
-		}
-		allowedNets = append(allowedNets, allowedNet)
 	}
 
 	upgrader := websocket.Upgrader{

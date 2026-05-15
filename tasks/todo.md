@@ -568,3 +568,16 @@ Verification:
 - `go test -run 'Test(ParseTCPForwardRule|ClassifyListeners|ValidateClientStartupConfig|ValidateServerStartupConfig|ValidateStartupConfig|ValidateListenRule|ExampleConfigFilesLoad|IntegrationSourceCIDRRejectionMetrics)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 34.0% of statements`.
+
+Post Phase 8 source CIDR startup validation:
+
+- [x] Parse and validate server source CIDR filters during startup validation.
+- [x] Pass parsed source CIDR networks into the WebSocket server instead of reparsing after startup side effects.
+- [x] Reject empty or malformed `-cidr` values with unit coverage.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `go test -run 'Test(ParseSourceCIDRs|ValidateStartupConfig|ExampleConfigFilesLoad|IntegrationSourceCIDRRejectionMetrics)' -count=1 ./...`: pass.
+- `go test ./...`: pass.
+- `go test -cover ./...`: pass, `coverage: 34.5% of statements`.
