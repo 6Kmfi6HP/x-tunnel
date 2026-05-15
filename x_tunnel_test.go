@@ -90,6 +90,116 @@ func TestSleepWithContextCanceled(t *testing.T) {
 	}
 }
 
+func TestValidateToken(t *testing.T) {
+	valid := []string{"", "local-test-token", "abc.DEF_123~"}
+	for _, token := range valid {
+		if err := validateToken(token); err != nil {
+			t.Fatalf("validateToken(%q) returned error: %v", token, err)
+		}
+	}
+
+	invalid := []string{"has space", "bad,comma", "bad/slash", "bad\nline"}
+	for _, token := range invalid {
+		if err := validateToken(token); err == nil {
+			t.Fatalf("validateToken(%q) accepted invalid token", token)
+		}
+	}
+}
+
+func TestValidateListenRule(t *testing.T) {
+	valid := []string{
+		"ws://127.0.0.1:18080/tunnel",
+		"wss://:18443/tunnel",
+		"socks5://user:pass@127.0.0.1:11080",
+		"http://127.0.0.1:18080",
+		"tcp://127.0.0.1:12000/127.0.0.1:19090",
+	}
+	for _, rule := range valid {
+		if err := validateListenRule(rule); err != nil {
+			t.Fatalf("validateListenRule(%q) returned error: %v", rule, err)
+		}
+	}
+
+	invalid := []string{
+		"",
+		"ftp://127.0.0.1:21",
+		"ws://127.0.0.1",
+		"socks5://127.0.0.1:70000",
+		"tcp://127.0.0.1:12000",
+		"tcp://127.0.0.1:12000/",
+	}
+	for _, rule := range invalid {
+		if err := validateListenRule(rule); err == nil {
+			t.Fatalf("validateListenRule(%q) accepted invalid rule", rule)
+		}
+	}
+}
+
+func TestValidateDialIPOverride(t *testing.T) {
+	valid := []string{"127.0.0.1", "127.0.0.1:443", "2001:db8::1", "[2001:db8::1]:443"}
+	for _, value := range valid {
+		if err := validateDialIPOverride(value); err != nil {
+			t.Fatalf("validateDialIPOverride(%q) returned error: %v", value, err)
+		}
+	}
+
+	invalid := []string{"example.com", "127.0.0.1:0", "127.0.0.1:70000", "[2001:db8::1]:0"}
+	for _, value := range invalid {
+		if err := validateDialIPOverride(value); err == nil {
+			t.Fatalf("validateDialIPOverride(%q) accepted invalid override", value)
+		}
+	}
+}
+
+func TestTargetPolicyAllows(t *testing.T) {
+	policy, err := parseTargetPolicy("10.0.0.0/8,2001:db8::/32", "10.0.9.0/24")
+	if err != nil {
+		t.Fatalf("parseTargetPolicy returned error: %v", err)
+	}
+
+	tests := []struct {
+		name   string
+		target string
+		want   bool
+	}{
+		{name: "allowed ipv4", target: "10.1.2.3:443", want: true},
+		{name: "denied before allow", target: "10.0.9.1:443", want: false},
+		{name: "outside allow", target: "192.0.2.1:443", want: false},
+		{name: "domain denied with allow policy", target: "example.com:443", want: false},
+		{name: "allowed ipv6", target: "[2001:db8::1]:443", want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, _ := policy.Allows(tt.target)
+			if got != tt.want {
+				t.Fatalf("TargetPolicy.Allows(%q) = %v, want %v", tt.target, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTargetPolicyDenyOnlyAllowsDomains(t *testing.T) {
+	policy, err := parseTargetPolicy("", "127.0.0.0/8")
+	if err != nil {
+		t.Fatalf("parseTargetPolicy returned error: %v", err)
+	}
+	if ok, _ := policy.Allows("127.0.0.1:80"); ok {
+		t.Fatal("deny-only policy allowed denied IP")
+	}
+	if ok, _ := policy.Allows("example.com:80"); !ok {
+		t.Fatal("deny-only policy rejected domain target")
+	}
+}
+
+func TestParseTargetPolicyRejectsInvalidCIDR(t *testing.T) {
+	if _, err := parseTargetPolicy("not-a-cidr", ""); err == nil {
+		t.Fatal("parseTargetPolicy accepted invalid allow CIDR")
+	}
+	if _, err := parseTargetPolicy("", "not-a-cidr"); err == nil {
+		t.Fatal("parseTargetPolicy accepted invalid deny CIDR")
+	}
+}
+
 func TestParseSOCKS5Addr(t *testing.T) {
 	tests := []struct {
 		name     string

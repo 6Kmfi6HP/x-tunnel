@@ -72,16 +72,16 @@ Verification:
 
 ### Phase 5: Security Hardening, 12:00-14:00
 
-- [ ] Add explicit config validation for listener and forward URLs.
-- [ ] Add safer token validation semantics and document token limitations.
-- [ ] Add optional target allow/deny CIDR or host rules if the scope stays small.
-- [ ] Review `-insecure`, fallback, and ECH interactions; make user-facing logs unambiguous.
-- [ ] Document recommended deployment modes.
+- [x] Add explicit config validation for listener and forward URLs.
+- [x] Add safer token validation semantics and document token limitations.
+- [x] Add optional target allow/deny CIDR or host rules if the scope stays small.
+- [x] Review `-insecure`, fallback, and ECH interactions; make user-facing logs unambiguous.
+- [x] Document recommended deployment modes.
 
 Verification:
 
-- [ ] Tests for config validation and auth failure behavior where practical.
-- [ ] Manual unauthorized token test.
+- [x] Tests for config validation and auth failure behavior where practical.
+- [x] Manual unauthorized token test.
 
 ### Phase 6: Observability and Operator UX, 14:00-15:30
 
@@ -184,3 +184,18 @@ Phase 4:
 - Lifecycle smoke result: `phase4_lifecycle_smoke=pass hash=2f7fb3bf5a5ef93f224c5a14ee54ed9112f54b07a152a37ac43cb640352aa45e socks_size=71153 tcp_size=71153 graceful_sigterm=pass`.
 
 Remaining Phase 4 work: complete.
+
+Phase 5:
+
+- Added startup validation for listener rules, token syntax, and `-ip` overrides.
+- Added `-allow-target` and `-deny-target` server CIDR policies for TCP/UDP target access.
+- Added `docs/deployment.md` covering token limits, source CIDR filtering, target filtering, TLS/ECH/`-insecure`, and recommended deployment commands.
+- Added unit tests for config validation and target policy behavior.
+- Verified with `go test ./...`: pass.
+- Verified with `go test -cover ./...`: pass, `coverage: 15.7% of statements`.
+- Verified wrong-token rejection with a real server/client: `phase5_token_reject=pass`.
+- Wrong-token evidence: client logged `认证失败：Token 不匹配或未提供`; server logged `Token 认证失败，来源 IP: 127.0.0.1`.
+- Verified target policy rejection with server `-allow-target 10.0.0.0/8` and client request to `127.0.0.1:19095`: `phase5_target_policy=pass curl_code=52`.
+- Target policy evidence: server logged `TCP 拒绝: 127.0.0.1:19095, reason=目标 127.0.0.1 未命中 allow-target`.
+
+Pending for later phases: observability/operator UX, integration smoke tests, and final review.

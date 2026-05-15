@@ -136,6 +136,8 @@ var (
 	keyFile          string
 	token            string
 	cidrs            string
+	targetAllowCIDRs string
+	targetDenyCIDRs  string
 	connectionNum    int
 	insecure         bool
 	ips              string
@@ -154,6 +156,7 @@ var (
 	udpBlockPorts map[int]struct{}
 
 	socks5Config *SOCKS5Config
+	targetPolicy *TargetPolicy
 	ipStrategy   byte
 )
 
@@ -171,6 +174,11 @@ type SOCKS5Config struct {
 	Password string
 }
 
+type TargetPolicy struct {
+	Allow []*net.IPNet
+	Deny  []*net.IPNet
+}
+
 func init() {
 	flag.StringVar(&listenAddr, "l", "", "监听地址 (支持多个，用逗号分隔)\n格式示例:\n  socks5://[user:pass@]0.0.0.0:1080\n  http://[user:pass@]0.0.0.0:8080\n  tcp://0.0.0.0:2000/1.2.3.4:22\n  ws://0.0.0.0:80/path (服务端模式)\n  wss://0.0.0.0:443/path (服务端模式)")
 	flag.StringVar(&forwardAddr, "f", "", "服务地址/代理地址 (客户端模式: ws://host:port 或 wss://host:port | 服务端模式: socks5://[user:pass@]host:port)")
@@ -181,11 +189,111 @@ func init() {
 	flag.StringVar(&keyFile, "key", "", "TLS密钥文件路径（默认:自动生成，仅服务端）")
 	flag.StringVar(&token, "token", "", "身份验证令牌（WebSocket Subprotocol）")
 	flag.StringVar(&cidrs, "cidr", "0.0.0.0/0,::/0", "允许的来源 IP 范围 (CIDR),多个范围用逗号分隔")
+	flag.StringVar(&targetAllowCIDRs, "allow-target", "", "服务端允许访问的目标 CIDR，多个用逗号分隔（留空表示不限制）")
+	flag.StringVar(&targetDenyCIDRs, "deny-target", "", "服务端拒绝访问的目标 CIDR，多个用逗号分隔")
 	flag.StringVar(&dnsServer, "dns", "https://doh.pub/dns-query", "查询 ECH 公钥所用的 DNS 服务器 (支持 DoH 或 UDP，仅 wss 模式生效)")
 	flag.StringVar(&echDomain, "ech", "cloudflare-ech.com", "用于查询 ECH 公钥的域名（仅 wss 模式生效）")
 	flag.BoolVar(&fallback, "fallback", false, "是否禁用 ECH 并回落到普通 TLS 1.3（仅 wss 模式生效，默认 false）")
 	flag.IntVar(&connectionNum, "n", 3, "每个IP建立的WebSocket连接数量")
 	flag.StringVar(&ips, "ips", "", "服务端解析目标地址的IP偏好 (仅客户端有效)\n 4: 仅IPv4\n 6: 仅IPv6\n 4,6: IPv4优先\n 6,4: IPv6优先")
+}
+
+func splitCommaList(raw string) []string {
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		trimmed := strings.TrimSpace(part)
+		if trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+func validateToken(value string) error {
+	if value == "" {
+		return nil
+	}
+	const separators = `()<>@,;:\"/[]?={} 	`
+	for _, r := range value {
+		if r < 33 || r > 126 || strings.ContainsRune(separators, r) {
+			return fmt.Errorf("必须是合法的 WebSocket subprotocol token，不能包含空白、控制字符或 HTTP 分隔符")
+		}
+	}
+	return nil
+}
+
+func validateHostPort(value string) error {
+	return validateHostPortValue(value, false)
+}
+
+func validateListenHostPort(value string) error {
+	return validateHostPortValue(value, true)
+}
+
+func validateHostPortValue(value string, allowEmptyHost bool) error {
+	host, port, err := net.SplitHostPort(value)
+	if err != nil {
+		return err
+	}
+	if !allowEmptyHost && strings.TrimSpace(host) == "" {
+		return fmt.Errorf("host 不能为空")
+	}
+	if strings.TrimSpace(port) == "" {
+		return fmt.Errorf("port 不能为空")
+	}
+	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+		return fmt.Errorf("port 必须在 1-65535 之间")
+	}
+	return nil
+}
+
+func validateDialIPOverride(value string) error {
+	if host, port, err := net.SplitHostPort(value); err == nil {
+		if strings.TrimSpace(port) == "" {
+			return fmt.Errorf("port 不能为空")
+		}
+		if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+			return fmt.Errorf("port 必须在 1-65535 之间")
+		}
+		if net.ParseIP(host) == nil {
+			return fmt.Errorf("host 必须是 IP 地址")
+		}
+		return nil
+	}
+	if net.ParseIP(value) == nil {
+		return fmt.Errorf("必须是 IP 地址或 IP:port")
+	}
+	return nil
+}
+
+func validateListenRule(rule string) error {
+	u, err := url.Parse(rule)
+	if err != nil {
+		return err
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "ws", "wss", "socks5", "http":
+		if u.Host == "" {
+			return fmt.Errorf("必须包含 host:port")
+		}
+		return validateListenHostPort(u.Host)
+	case "tcp":
+		raw := strings.TrimPrefix(rule, "tcp://")
+		parts := strings.Split(raw, "/")
+		if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return fmt.Errorf("格式必须是 tcp://listen_host:port/target_host:port")
+		}
+		if err := validateListenHostPort(parts[0]); err != nil {
+			return fmt.Errorf("监听地址无效: %w", err)
+		}
+		if err := validateHostPort(parts[1]); err != nil {
+			return fmt.Errorf("目标地址无效: %w", err)
+		}
+		return nil
+	default:
+		return fmt.Errorf("不支持的监听协议 %q", u.Scheme)
+	}
 }
 
 func main() {
@@ -195,6 +303,9 @@ func main() {
 		flag.Usage()
 		return
 	}
+	if err := validateToken(token); err != nil {
+		log.Fatalf("[配置] token 无效: %v", err)
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -203,34 +314,50 @@ func main() {
 		log.Printf("[客户端] IP 访问策略: %s (code: %d)", ips, ipStrategy)
 	}
 
-	var targetIPs []string
-	if ipAddr != "" {
-		parts := strings.Split(ipAddr, ",")
-		for _, p := range parts {
-			trimmed := strings.TrimSpace(p)
-			if trimmed != "" {
-				targetIPs = append(targetIPs, trimmed)
-			}
+	targetIPs := splitCommaList(ipAddr)
+	for _, targetIP := range targetIPs {
+		if err := validateDialIPOverride(targetIP); err != nil {
+			log.Fatalf("[客户端] -ip 参数无效 %q: %v", targetIP, err)
 		}
 	}
 
-	listeners := strings.Split(listenAddr, ",")
+	listeners := splitCommaList(listenAddr)
+	if len(listeners) == 0 {
+		log.Fatalf("[配置] 至少需要一个监听地址")
+	}
 	isServer := false
+	serverListeners := 0
 	for _, l := range listeners {
-		l = strings.TrimSpace(l)
+		if err := validateListenRule(l); err != nil {
+			log.Fatalf("[配置] 监听地址无效 %q: %v", l, err)
+		}
 		if strings.HasPrefix(l, "ws://") || strings.HasPrefix(l, "wss://") {
+			serverListeners++
 			isServer = true
 			listenAddr = l
-			break
 		}
+	}
+	if isServer && (serverListeners != 1 || len(listeners) != 1) {
+		log.Fatalf("[配置] 服务端模式只能配置一个 ws:// 或 wss:// 监听地址，不能与客户端监听器混用")
 	}
 
 	// ================= 服务端模式 =================
 	if isServer {
+		if token == "" {
+			log.Printf("[服务端] 警告: 未配置 token，WebSocket 连接不会进行令牌认证")
+		}
+		var err error
+		targetPolicy, err = parseTargetPolicy(targetAllowCIDRs, targetDenyCIDRs)
+		if err != nil {
+			log.Fatalf("[服务端] 目标访问策略无效: %v", err)
+		}
 		if forwardAddr != "" {
 			config, err := parseSOCKS5Addr(forwardAddr)
 			if err != nil {
 				log.Fatalf("[服务端] 解析SOCKS5代理地址失败: %v", err)
+			}
+			if err := validateHostPort(config.Host); err != nil {
+				log.Fatalf("[服务端] SOCKS5代理地址无效: %v", err)
 			}
 			socks5Config = config
 			log.Printf("[服务端] 使用SOCKS5前置代理: %s", config.Host)
@@ -248,6 +375,9 @@ func main() {
 	if forwardAddr == "" {
 		log.Fatalf("[客户端] 客户端模式必须指定服务地址 (-f ws:// 或 -f wss://)")
 	}
+	if token == "" {
+		log.Printf("[客户端] 警告: 未配置 token，将尝试连接未启用令牌认证的服务端")
+	}
 	if connectionNum <= 0 {
 		log.Fatalf("[客户端] 参数 -n 必须大于 0 (当前: %d)", connectionNum)
 	}
@@ -259,6 +389,9 @@ func main() {
 	scheme := strings.ToLower(forwardURL.Scheme)
 	if scheme != "wss" && scheme != "ws" {
 		log.Fatalf("[客户端] 仅支持 ws:// 或 wss:// 协议 (当前: %s)", forwardURL.Scheme)
+	}
+	if forwardURL.Host == "" {
+		log.Fatalf("[客户端] 服务地址必须包含 host:port")
 	}
 
 	if scheme == "wss" {
@@ -354,6 +487,78 @@ func parseIPStrategy(s string) byte {
 	default:
 		return IPStrategyDefault
 	}
+}
+
+func parseTargetPolicy(allowRaw, denyRaw string) (*TargetPolicy, error) {
+	allow, err := parseCIDRList(allowRaw)
+	if err != nil {
+		return nil, fmt.Errorf("allow-target: %w", err)
+	}
+	deny, err := parseCIDRList(denyRaw)
+	if err != nil {
+		return nil, fmt.Errorf("deny-target: %w", err)
+	}
+	return &TargetPolicy{Allow: allow, Deny: deny}, nil
+}
+
+func parseCIDRList(raw string) ([]*net.IPNet, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+	var nets []*net.IPNet
+	for _, part := range strings.Split(raw, ",") {
+		item := strings.TrimSpace(part)
+		if item == "" {
+			continue
+		}
+		_, n, err := net.ParseCIDR(item)
+		if err != nil {
+			return nil, fmt.Errorf("CIDR %q 解析失败: %w", item, err)
+		}
+		nets = append(nets, n)
+	}
+	return nets, nil
+}
+
+func (p *TargetPolicy) Allows(target string) (bool, string) {
+	if p == nil || len(p.Allow) == 0 && len(p.Deny) == 0 {
+		return true, ""
+	}
+	host, _, err := net.SplitHostPort(target)
+	if err != nil {
+		return false, fmt.Sprintf("目标地址格式无效: %v", err)
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		if len(p.Allow) > 0 {
+			return false, "目标是域名，无法证明其属于 allow-target CIDR"
+		}
+		return true, ""
+	}
+	for _, n := range p.Deny {
+		if n.Contains(ip) {
+			return false, fmt.Sprintf("目标 %s 命中 deny-target %s", ip, n)
+		}
+	}
+	if len(p.Allow) == 0 {
+		return true, ""
+	}
+	for _, n := range p.Allow {
+		if n.Contains(ip) {
+			return true, ""
+		}
+	}
+	return false, fmt.Sprintf("目标 %s 未命中 allow-target", ip)
+}
+
+func ensureTargetAllowed(target string) error {
+	if targetPolicy == nil {
+		return nil
+	}
+	if ok, reason := targetPolicy.Allows(target); !ok {
+		return errors.New(reason)
+	}
+	return nil
 }
 
 type wsNetConn struct {
@@ -1667,6 +1872,10 @@ func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream
 		_, _ = stream.Write(payload)
 	case streamKindTCP:
 		log.Printf("[服务端] 客户ID:%s TCP 打开: %s, 通道:%d", shortID(session.clientID), target, ch.id)
+		if err := ensureTargetAllowed(target); err != nil {
+			log.Printf("[服务端] 客户ID:%s TCP 拒绝: %s, reason=%v, 通道:%d", shortID(session.clientID), target, err, ch.id)
+			return
+		}
 		var tcpConn net.Conn
 		if socks5Config != nil {
 			tcpConn, err = dialViaSocks5("tcp", target)
@@ -1681,6 +1890,10 @@ func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream
 		log.Printf("[服务端] 客户ID:%s TCP 关闭: %s, 通道:%d", shortID(session.clientID), target, ch.id)
 	case streamKindUDP:
 		log.Printf("[服务端] 客户ID:%s SOCKS5 UDP 访问: %s, 通道:%d", shortID(session.clientID), target, ch.id)
+		if err := ensureTargetAllowed(target); err != nil {
+			log.Printf("[服务端] 客户ID:%s UDP 拒绝: %s, reason=%v, 通道:%d", shortID(session.clientID), target, err, ch.id)
+			return
+		}
 		var relay UDPRelayer
 		if socks5Config != nil {
 			var socksRelay *SOCKS5UDPRelay
