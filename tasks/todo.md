@@ -356,8 +356,23 @@ Post Phase 8 DNS query hardening:
 
 - Hardened DNS query construction for ECH lookups so invalid domains, empty labels, illegal label characters, labels over 63 bytes, and domains over 253 bytes are rejected before encoding.
 - DNS query construction now normalizes names to lowercase and rejects labels with leading/trailing hyphens, spaces, underscores, and non-ASCII characters.
+- Limited DoH response reads to one DNS message (`65535` bytes) and reject oversized responses.
 - Updated UDP DNS and DoH paths to return query construction errors instead of silently truncating label lengths.
 - Added unit coverage for valid trailing-dot normalization and invalid DNS names.
-- Verified focused DNS test with `go test -run TestBuildDNSQueryValidatesDomain -count=1 ./...`: pass.
+- Verified focused DNS tests with `go test -run 'Test(BuildDNSQueryValidatesDomain|QueryDoHRejectsOversizedResponse)' -count=1 ./...`: pass.
 - Verified with `go test ./...`: pass.
-- Verified with `go test -cover ./...`: pass, `coverage: 24.2% of statements`.
+- Verified with `go test -cover ./...`: pass, `coverage: 25.2% of statements`.
+
+Post Phase 8 per-client stream limits:
+
+- Added optional server-side `-max-streams` limit for active smux streams per client session.
+- Kept default behavior compatible with `0` meaning unlimited.
+- Added JSON config aliases `max_streams` and `max-streams`.
+- Reject negative values in startup/config validation.
+- Added unit coverage for stream accounting, config parsing, duplicate aliases, and validation.
+- Documented the limit in `README.md`, `docs/deployment.md`, and `docs/troubleshooting.md`.
+- Verified focused stream/config tests with `go test -run 'Test(ClientSessionStreamLimitAccounting|ValidateGlobalConfig|LoadConfigFile)' -count=1 ./...`: pass.
+- Verified `go run . -h` includes `-max-streams`.
+- Verified with `go test ./...`: pass.
+- Verified with `go test -cover ./...`: pass, `coverage: 26.4% of statements`.
+- Verified real process stream-limit smoke with server `-max-streams 1`: `stream_limit_smoke=pass max_streams=1 blocked_exit=52`; one long-lived CONNECT stream stayed open and the next HTTP proxy request was rejected with server log `拒绝新 stream`.

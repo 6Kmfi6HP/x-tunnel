@@ -41,6 +41,19 @@ Policy order:
 4. Domain targets are still rejected when only CIDR allow rules exist because the server cannot prove the pre-dial domain belongs to an allowed CIDR.
 5. Domain targets are allowed under deny-only policy unless the hostname matches `-deny-host`.
 
+## Resource Limits
+
+Use `-max-streams` on the server to cap active smux streams per client session:
+
+```bash
+./x-tunnel \
+  -l ws://0.0.0.0:18080/tunnel \
+  -token "$TOKEN" \
+  -max-streams 256
+```
+
+The default `0` preserves legacy behavior and means unlimited. The limit counts all active streams for the same `client_id` across that client's WebSocket channels, including short-lived hello and ping streams. JSON config accepts `max_streams` or `max-streams`.
+
 ## TLS, ECH, and `-insecure`
 
 Prefer `wss://` with a real certificate for exposed deployments.
@@ -100,7 +113,8 @@ Client:
   -key /path/privkey.pem \
   -token "$TOKEN" \
   -cidr 203.0.113.0/24 \
-  -allow-target 10.0.0.0/8
+  -allow-target 10.0.0.0/8 \
+  -max-streams 256
 ```
 
 For local development, keep the listener on loopback:

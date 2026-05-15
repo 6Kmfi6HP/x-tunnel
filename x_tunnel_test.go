@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -141,6 +143,7 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 	oldCfg := cfg
 	oldListen, oldForward, oldToken := listenAddr, forwardAddr, token
 	oldMetrics, oldConnectionNum := metricsAddr, connectionNum
+	oldMaxStreams := maxStreamsPerClient
 	oldAllow, oldDeny := targetAllowCIDRs, targetDenyCIDRs
 	oldAllowHosts, oldDenyHosts := targetAllowHosts, targetDenyHosts
 	oldClientCA, oldClientCert, oldClientKey := clientCAFile, clientCertFile, clientKeyFile
@@ -148,6 +151,7 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 		cfg = oldCfg
 		listenAddr, forwardAddr, token = oldListen, oldForward, oldToken
 		metricsAddr, connectionNum = oldMetrics, oldConnectionNum
+		maxStreamsPerClient = oldMaxStreams
 		targetAllowCIDRs, targetDenyCIDRs = oldAllow, oldDeny
 		targetAllowHosts, targetDenyHosts = oldAllowHosts, oldDenyHosts
 		clientCAFile, clientCertFile, clientKeyFile = oldClientCA, oldClientCert, oldClientKey
@@ -159,6 +163,7 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 	cfg.DialTimeout = 3 * time.Second
 	cfg.ReconnectJitter = 500 * time.Millisecond
 	connectionNum = 3
+	maxStreamsPerClient = 0
 
 	path := filepath.Join(t.TempDir(), "config.json")
 	raw := `{
@@ -175,7 +180,8 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 		"client-key": "client-key.pem",
 		"dial_timeout": "250ms",
 		"reconnect_jitter": "0s",
-		"connections": 2
+		"connections": 2,
+		"max-streams": 8
 	}`
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
 		t.Fatal(err)
@@ -219,6 +225,9 @@ func TestLoadConfigFileAppliesUnsetFlags(t *testing.T) {
 	if connectionNum != 2 {
 		t.Fatalf("connectionNum = %d, want 2", connectionNum)
 	}
+	if maxStreamsPerClient != 8 {
+		t.Fatalf("maxStreamsPerClient = %d, want 8", maxStreamsPerClient)
+	}
 }
 
 func TestLoadConfigFileRejectsInvalidDuration(t *testing.T) {
@@ -241,9 +250,23 @@ func TestLoadConfigFileRejectsNegativeJitter(t *testing.T) {
 	}
 }
 
+func TestLoadConfigFileRejectsNegativeMaxStreams(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"max_streams":-1}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadConfigFile(path, nil); err == nil {
+		t.Fatal("loadConfigFile accepted negative max stream limit")
+	}
+}
+
 func TestValidateGlobalConfig(t *testing.T) {
 	oldCfg := cfg
-	defer func() { cfg = oldCfg }()
+	oldMaxStreams := maxStreamsPerClient
+	defer func() {
+		cfg = oldCfg
+		maxStreamsPerClient = oldMaxStreams
+	}()
 	cfg = GlobalConfig{
 		DialTimeout:        time.Second,
 		WSHandshakeTimeout: time.Second,
@@ -257,9 +280,15 @@ func TestValidateGlobalConfig(t *testing.T) {
 		ShutdownTimeout:    time.Second,
 		ReadBuf:            64 * 1024,
 	}
+	maxStreamsPerClient = 0
 	if err := validateGlobalConfig(); err != nil {
 		t.Fatalf("validateGlobalConfig rejected zero jitter: %v", err)
 	}
+	maxStreamsPerClient = -1
+	if err := validateGlobalConfig(); err == nil {
+		t.Fatal("validateGlobalConfig accepted negative max stream limit")
+	}
+	maxStreamsPerClient = 0
 	cfg.ReconnectJitter = -time.Nanosecond
 	if err := validateGlobalConfig(); err == nil {
 		t.Fatal("validateGlobalConfig accepted negative jitter")
@@ -307,6 +336,56 @@ func TestBuildDNSQueryValidatesDomain(t *testing.T) {
 		if _, err := buildDNSQuery(domain, typeHTTPS); err == nil {
 			t.Fatalf("buildDNSQuery(%q) accepted invalid domain", domain)
 		}
+	}
+}
+
+func TestQueryDoHRejectsOversizedResponse(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(bytes.Repeat([]byte{0}, maxDNSMessageSize+1))
+	}))
+	defer server.Close()
+
+	if _, err := queryDoH("example.com", server.URL); err == nil || !strings.Contains(err.Error(), "DNS 响应过大") {
+		t.Fatalf("queryDoH oversized response err = %v", err)
+	}
+}
+
+func TestClientSessionStreamLimitAccounting(t *testing.T) {
+	oldMaxStreams := maxStreamsPerClient
+	defer func() {
+		maxStreamsPerClient = oldMaxStreams
+	}()
+	session := &ClientSession{clientID: "test-client", channels: make(map[uint64]*WSChannel)}
+
+	maxStreamsPerClient = 2
+	if active, ok := session.tryAcquireStream(); !ok || active != 1 {
+		t.Fatalf("first acquire = active %d ok %v, want active 1 ok true", active, ok)
+	}
+	if active, ok := session.tryAcquireStream(); !ok || active != 2 {
+		t.Fatalf("second acquire = active %d ok %v, want active 2 ok true", active, ok)
+	}
+	if active, ok := session.tryAcquireStream(); ok || active != 2 {
+		t.Fatalf("third acquire = active %d ok %v, want active 2 ok false", active, ok)
+	}
+	if got := session.activeStreamCount(); got != 2 {
+		t.Fatalf("activeStreamCount = %d, want 2", got)
+	}
+	session.releaseStream()
+	if got := session.activeStreamCount(); got != 1 {
+		t.Fatalf("activeStreamCount after release = %d, want 1", got)
+	}
+	if active, ok := session.tryAcquireStream(); !ok || active != 2 {
+		t.Fatalf("acquire after release = active %d ok %v, want active 2 ok true", active, ok)
+	}
+
+	maxStreamsPerClient = 0
+	if _, ok := session.tryAcquireStream(); !ok {
+		t.Fatal("unlimited maxStreamsPerClient rejected a stream")
 	}
 }
 
@@ -388,6 +467,16 @@ func TestLoadConfigFileRejectsDuplicateHostAliases(t *testing.T) {
 	}
 	if err := loadConfigFile(path, nil); err == nil {
 		t.Fatal("loadConfigFile accepted duplicate allow host aliases")
+	}
+}
+
+func TestLoadConfigFileRejectsDuplicateMaxStreamAliases(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	if err := os.WriteFile(path, []byte(`{"max_streams":8,"max-streams":16}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := loadConfigFile(path, nil); err == nil {
+		t.Fatal("loadConfigFile accepted duplicate max stream aliases")
 	}
 }
 

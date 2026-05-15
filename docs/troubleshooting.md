@@ -65,6 +65,19 @@ Checks:
 - If behind a reverse proxy, enforce source filtering at the proxy or ensure the tunnel process receives the true remote address.
 - Update `-cidr` only after confirming the observed remote address in server logs.
 
+## Stream Limit Rejection
+
+Symptoms:
+
+- Server logs `拒绝新 stream`.
+- New client requests fail while existing streams continue running.
+
+Checks:
+
+- Review server `-max-streams`; `0` means unlimited.
+- Raise the limit if expected concurrency is higher than the configured cap.
+- Check whether many long-lived TCP or UDP streams are stuck open.
+
 ## mTLS Failure
 
 Symptoms:

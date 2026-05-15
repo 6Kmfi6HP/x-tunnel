@@ -129,27 +129,28 @@ func sleepWithContext(ctx context.Context, d time.Duration) bool {
 // ======================== 全局参数 ========================
 
 var (
-	listenAddr       string
-	forwardAddr      string
-	ipAddr           string
-	udpBlockPortsStr string
-	certFile         string
-	keyFile          string
-	clientCAFile     string
-	clientCertFile   string
-	clientKeyFile    string
-	configFile       string
-	token            string
-	showVersion      bool
-	metricsAddr      string
-	cidrs            string
-	targetAllowCIDRs string
-	targetDenyCIDRs  string
-	targetAllowHosts string
-	targetDenyHosts  string
-	connectionNum    int
-	insecure         bool
-	ips              string
+	listenAddr          string
+	forwardAddr         string
+	ipAddr              string
+	udpBlockPortsStr    string
+	certFile            string
+	keyFile             string
+	clientCAFile        string
+	clientCertFile      string
+	clientKeyFile       string
+	configFile          string
+	token               string
+	showVersion         bool
+	metricsAddr         string
+	cidrs               string
+	targetAllowCIDRs    string
+	targetDenyCIDRs     string
+	targetAllowHosts    string
+	targetDenyHosts     string
+	maxStreamsPerClient int
+	connectionNum       int
+	insecure            bool
+	ips                 string
 
 	dnsServer string
 	echDomain string
@@ -220,6 +221,7 @@ func init() {
 	flag.StringVar(&targetDenyCIDRs, "deny-target", "", "服务端拒绝访问的目标 CIDR，多个用逗号分隔")
 	flag.StringVar(&targetAllowHosts, "allow-host", "", "服务端允许访问的目标主机名，多个用逗号分隔，支持 *.example.com")
 	flag.StringVar(&targetDenyHosts, "deny-host", "", "服务端拒绝访问的目标主机名，多个用逗号分隔，支持 *.example.com")
+	flag.IntVar(&maxStreamsPerClient, "max-streams", 0, "服务端每个客户端允许的最大并发 smux stream 数（0 表示不限制）")
 	flag.StringVar(&dnsServer, "dns", "https://doh.pub/dns-query", "查询 ECH 公钥所用的 DNS 服务器 (支持 DoH 或 UDP，仅 wss 模式生效)")
 	flag.StringVar(&echDomain, "ech", "cloudflare-ech.com", "用于查询 ECH 公钥的域名（仅 wss 模式生效）")
 	flag.BoolVar(&fallback, "fallback", false, "是否禁用 ECH 并回落到普通 TLS 1.3（仅 wss 模式生效，默认 false）")
@@ -265,6 +267,8 @@ type FileConfig struct {
 	DenyTargetFlag     *string `json:"deny-target"`
 	AllowHostFlag      *string `json:"allow-host"`
 	DenyHostFlag       *string `json:"deny-host"`
+	MaxStreams         *int    `json:"max_streams"`
+	MaxStreamsFlag     *int    `json:"max-streams"`
 	DNS                *string `json:"dns"`
 	ECH                *string `json:"ech"`
 	IPS                *string `json:"ips"`
@@ -325,6 +329,10 @@ func loadConfigFile(path string, seen map[string]bool) error {
 	if err != nil {
 		return err
 	}
+	maxStreams, err := singleIntConfigAlias("max_streams", "max-streams", fc.MaxStreams, fc.MaxStreamsFlag)
+	if err != nil {
+		return err
+	}
 	clientCA, err := singleStringConfigAlias("client_ca", "client-ca", fc.ClientCA, fc.ClientCAFlag)
 	if err != nil {
 		return err
@@ -358,6 +366,9 @@ func loadConfigFile(path string, seen map[string]bool) error {
 	applyStringConfig(seen, "ips", fc.IPS, &ips)
 	if fc.Connections != nil && !seen["n"] {
 		connectionNum = *fc.Connections
+	}
+	if err := applyNonNegativeIntConfig(seen, "max-streams", maxStreams, &maxStreamsPerClient); err != nil {
+		return err
 	}
 	if fc.Insecure != nil && !seen["insecure"] {
 		insecure = *fc.Insecure
@@ -408,6 +419,16 @@ func singleStringConfigAlias(primaryName, aliasName string, primary, alias *stri
 	return alias, nil
 }
 
+func singleIntConfigAlias(primaryName, aliasName string, primary, alias *int) (*int, error) {
+	if primary != nil && alias != nil {
+		return nil, fmt.Errorf("配置字段 %q 和 %q 不能同时设置", primaryName, aliasName)
+	}
+	if primary != nil {
+		return primary, nil
+	}
+	return alias, nil
+}
+
 func applyStringConfig(seen map[string]bool, flagName string, value *string, target *string) {
 	if value != nil && !seen[flagName] {
 		*target = *value
@@ -441,6 +462,17 @@ func applyNonNegativeDurationConfig(seen map[string]bool, flagName string, value
 		return fmt.Errorf("配置字段 %q 不能小于 0", flagName)
 	}
 	*target = parsed
+	return nil
+}
+
+func applyNonNegativeIntConfig(seen map[string]bool, flagName string, value *int, target *int) error {
+	if value == nil || seen[flagName] {
+		return nil
+	}
+	if *value < 0 {
+		return fmt.Errorf("配置字段 %q 不能小于 0", flagName)
+	}
+	*target = *value
 	return nil
 }
 
@@ -479,6 +511,9 @@ func validateGlobalConfig() error {
 	}
 	if cfg.ReconnectMaxDelay < cfg.ReconnectDelay {
 		return fmt.Errorf("reconnect-max-delay 不能小于 reconnect-delay")
+	}
+	if maxStreamsPerClient < 0 {
+		return fmt.Errorf("max-streams 不能小于 0")
 	}
 	return nil
 }
@@ -1520,6 +1555,7 @@ func parseSOCKS5UDPResp(packet []byte) (*net.UDPAddr, []byte, error) {
 // ======================== ECH 相关（客户端） ========================
 
 const typeHTTPS = 65
+const maxDNSMessageSize = 65535
 
 func prepareECH() error {
 	for {
@@ -1734,9 +1770,12 @@ func queryDoH(domain, dohURL string) (string, error) {
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("DoH 状态码: %d", resp.StatusCode)
 	}
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDNSMessageSize+1))
 	if err != nil {
 		return "", err
+	}
+	if len(body) > maxDNSMessageSize {
+		return "", fmt.Errorf("DNS 响应过大")
 	}
 	return parseDNSResponse(body)
 }
@@ -1878,8 +1917,9 @@ type ClientSession struct {
 
 	clientID string
 
-	mu       sync.RWMutex
-	channels map[uint64]*WSChannel
+	mu            sync.RWMutex
+	channels      map[uint64]*WSChannel
+	activeStreams int
 }
 
 func getOrCreateClientSession(clientID string) *ClientSession {
@@ -1936,6 +1976,36 @@ func (s *ClientSession) removeChannel(id uint64, current *WSChannel) {
 		log.Printf("[服务端] 客户端会话 %s 断开", s.clientID)
 		serverSessions.Delete(s.clientID)
 	}
+}
+
+func (s *ClientSession) tryAcquireStream() (int, bool) {
+	if maxStreamsPerClient <= 0 {
+		return 0, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.activeStreams >= maxStreamsPerClient {
+		return s.activeStreams, false
+	}
+	s.activeStreams++
+	return s.activeStreams, true
+}
+
+func (s *ClientSession) releaseStream() {
+	if maxStreamsPerClient <= 0 {
+		return
+	}
+	s.mu.Lock()
+	if s.activeStreams > 0 {
+		s.activeStreams--
+	}
+	s.mu.Unlock()
+}
+
+func (s *ClientSession) activeStreamCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.activeStreams
 }
 
 func generateSelfSignedCert() (tls.Certificate, error) {
@@ -2279,12 +2349,20 @@ func handleWebSocketChannel(ch *WSChannel) {
 			log.Printf("[服务端] 客户端通道 %d 断开", ch.id)
 			return
 		}
+		if active, ok := session.tryAcquireStream(); !ok {
+			log.Printf("[服务端] 客户ID:%s 通道:%d 拒绝新 stream: active=%d max-streams=%d", shortID(session.clientID), ch.id, active, maxStreamsPerClient)
+			_ = stream.Close()
+			continue
+		}
 		go handleSmuxStream(session, ch, stream)
 	}
 }
 
 func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream) {
-	defer stream.Close()
+	defer func() {
+		session.releaseStream()
+		stream.Close()
+	}()
 	streamID := atomic.AddUint64(&serverStreamSeq, 1)
 	kind, strategy, target, err := readSmuxOpenHeader(stream)
 	if err != nil {
