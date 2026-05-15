@@ -470,5 +470,3 @@ Verification:
 - `go test -run 'Test(SmuxOpenHeader|ProtocolHello|TCPOpenStatus|Chunk|UDPReply)' -count=1 ./...`: pass.
 - `go test ./...`: pass.
 - `go test -cover ./...`: pass, `coverage: 29.6% of statements`.
-- `go test ./...`: pass.
-- `go test -cover ./...`: pass, `coverage: 29.3% of statements`.
