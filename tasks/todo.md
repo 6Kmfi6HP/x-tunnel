@@ -2589,3 +2589,24 @@ Review:
 
 - Upstream SOCKS5 UDP ASSOCIATE wildcard IPv4 relay addresses are now covered.
 - The test proves `newSOCKS5UDPRelay` maps `0.0.0.0` to the configured SOCKS5 proxy TCP host before resolving the UDP relay address.
+
+Post Phase 8 DNS response parser boundary hardening:
+
+- [x] Validate DNS response transaction ID and question count before parsing answers.
+- [x] Add bounded DNS name skipping for question and answer names, including compression pointers.
+- [x] Cover malformed DNS response ID, question count, name overrun, and compression pointer overrun.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'Test(ParseDNSResponse|QueryDoH|QueryDNSUDP|QueryHTTPSRecord)' -count=1 ./...`: pass.
+- `go test -run '^$' -fuzz FuzzParseDNSResponse -fuzztime=2s ./...`: pass, `execs: 84133`, `new interesting: 25`.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 74.9% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- DNS response parsing now rejects mismatched transaction IDs, unexpected question counts, truncated question sections, truncated answer sections, and malformed name compression.
+- The parser uses a shared bounded name skipper so question and answer names fail with explicit errors instead of silently falling through to an empty ECH result.

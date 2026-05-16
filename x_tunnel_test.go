@@ -679,6 +679,65 @@ func TestParseDNSResponseRejectsInvalidStatus(t *testing.T) {
 	}
 }
 
+func TestParseDNSResponseRejectsMalformedBoundaries(t *testing.T) {
+	seed, err := dnsHTTPSResponseSeed([]byte("ech"))
+	if err != nil {
+		t.Fatalf("build DNS response seed: %v", err)
+	}
+	query, err := buildDNSQuery("example.com", typeHTTPS)
+	if err != nil {
+		t.Fatalf("build DNS query seed: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		message []byte
+		want    string
+	}{
+		{
+			name: "transaction id mismatch",
+			message: func() []byte {
+				msg := append([]byte(nil), seed...)
+				msg[1] = 2
+				return msg
+			}(),
+			want: "事务 ID",
+		},
+		{
+			name: "question count mismatch",
+			message: func() []byte {
+				msg := append([]byte(nil), seed...)
+				msg[5] = 2
+				return msg
+			}(),
+			want: "问题数",
+		},
+		{
+			name:    "question name overrun",
+			message: []byte{0x00, 0x01, 0x81, 0x80, 0x00, 0x01, 0x00, 0x01, 0, 0, 0, 0, 63},
+			want:    "名称越界",
+		},
+		{
+			name: "answer compression pointer overrun",
+			message: func() []byte {
+				msg := append([]byte(nil), seed...)
+				msg[len(query)] = 0xC0
+				msg[len(query)+1] = 0xFF
+				return msg
+			}(),
+			want: "压缩指针越界",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := parseDNSResponse(tt.message); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("parseDNSResponse err = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func TestQueryDNSUDPReturnsECH(t *testing.T) {
 	oldCfg := cfg
 	defer func() { cfg = oldCfg }()

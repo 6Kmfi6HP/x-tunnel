@@ -2156,42 +2156,55 @@ func parseDNSResponse(response []byte) (string, error) {
 	if len(response) < 12 {
 		return "", fmt.Errorf("响应过短")
 	}
+	if binary.BigEndian.Uint16(response[0:2]) != 1 {
+		return "", fmt.Errorf("DNS 事务 ID 不匹配")
+	}
 	if response[2]&0x80 == 0 {
 		return "", fmt.Errorf("DNS 消息不是响应")
 	}
 	if rcode := response[3] & 0x0F; rcode != 0 {
 		return "", fmt.Errorf("DNS 响应错误码: %d", rcode)
 	}
+	if qdcount := binary.BigEndian.Uint16(response[4:6]); qdcount != 1 {
+		return "", fmt.Errorf("DNS 问题数无效: %d", qdcount)
+	}
 	ancount := binary.BigEndian.Uint16(response[6:8])
 	if ancount == 0 {
 		return "", fmt.Errorf("无答案记录")
 	}
 	offset := 12
-	for offset < len(response) && response[offset] != 0 {
-		offset += int(response[offset]) + 1
+	next, err := skipDNSName(response, offset)
+	if err != nil {
+		return "", err
 	}
-	offset += 5
+	offset = next
+	if offset+4 > len(response) {
+		return "", fmt.Errorf("DNS 问题区越界")
+	}
+	qtype := binary.BigEndian.Uint16(response[offset : offset+2])
+	qclass := binary.BigEndian.Uint16(response[offset+2 : offset+4])
+	if qtype != typeHTTPS || qclass != 1 {
+		return "", fmt.Errorf("DNS 问题区类型无效")
+	}
+	offset += 4
 	for i := 0; i < int(ancount); i++ {
 		if offset >= len(response) {
-			break
+			return "", fmt.Errorf("DNS 答案记录越界")
 		}
-		if response[offset]&0xC0 == 0xC0 {
-			offset += 2
-		} else {
-			for offset < len(response) && response[offset] != 0 {
-				offset += int(response[offset]) + 1
-			}
-			offset++
+		next, err := skipDNSName(response, offset)
+		if err != nil {
+			return "", err
 		}
+		offset = next
 		if offset+10 > len(response) {
-			break
+			return "", fmt.Errorf("DNS 答案记录越界")
 		}
 		rrType := binary.BigEndian.Uint16(response[offset : offset+2])
 		offset += 8
 		dataLen := binary.BigEndian.Uint16(response[offset : offset+2])
 		offset += 2
 		if offset+int(dataLen) > len(response) {
-			break
+			return "", fmt.Errorf("DNS 答案数据越界")
 		}
 		data := response[offset : offset+int(dataLen)]
 		offset += int(dataLen)
@@ -2202,6 +2215,54 @@ func parseDNSResponse(response []byte) (string, error) {
 		}
 	}
 	return "", nil
+}
+
+func skipDNSName(message []byte, offset int) (int, error) {
+	if offset < 0 || offset >= len(message) {
+		return 0, fmt.Errorf("DNS 名称越界")
+	}
+	next := -1
+	seen := make(map[int]struct{})
+	for {
+		if offset >= len(message) {
+			return 0, fmt.Errorf("DNS 名称越界")
+		}
+		if _, ok := seen[offset]; ok {
+			return 0, fmt.Errorf("DNS 压缩指针循环")
+		}
+		seen[offset] = struct{}{}
+
+		length := int(message[offset])
+		switch length & 0xC0 {
+		case 0x00:
+			if length == 0 {
+				offset++
+				if next != -1 {
+					return next, nil
+				}
+				return offset, nil
+			}
+			offset++
+			if offset+length > len(message) {
+				return 0, fmt.Errorf("DNS 名称越界")
+			}
+			offset += length
+		case 0xC0:
+			if offset+1 >= len(message) {
+				return 0, fmt.Errorf("DNS 压缩指针越界")
+			}
+			pointer := int(message[offset]&0x3F)<<8 | int(message[offset+1])
+			if pointer >= len(message) {
+				return 0, fmt.Errorf("DNS 压缩指针越界")
+			}
+			if next == -1 {
+				next = offset + 2
+			}
+			offset = pointer
+		default:
+			return 0, fmt.Errorf("DNS 名称标签类型无效")
+		}
+	}
 }
 
 func parseHTTPSRecord(data []byte) string {
