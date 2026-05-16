@@ -7,7 +7,7 @@ The local HTTP proxy listener supports `CONNECT`, ordinary `http://` absolute-fo
 ## Build
 
 ```bash
-go build -o x-tunnel .
+go build -o x-tunnel ./cmd/x-tunnel
 ./x-tunnel -version
 ```
 
@@ -18,7 +18,7 @@ go build -ldflags "\
   -X main.buildVersion=0.1.0 \
   -X main.buildCommit=$(git rev-parse --short HEAD) \
   -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -o x-tunnel .
+  -o x-tunnel ./cmd/x-tunnel
 ```
 
 Or use the build script:
@@ -34,6 +34,46 @@ Create cross-platform release artifacts:
 VERSION=0.1.0 ./scripts/release.sh
 cat dist/SHA256SUMS
 ```
+
+## Container Image
+
+Build locally:
+
+```bash
+docker build -t x-tunnel:local .
+docker run --rm x-tunnel:local -version
+```
+
+Tagged releases publish multi-architecture images to GHCR:
+
+```bash
+docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.1.0
+docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.1.0 -version
+```
+
+Run a loopback-only server in a container:
+
+```bash
+docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.1.0 \
+  -l ws://0.0.0.0:18080/tunnel \
+  -token local-test-token \
+  -cidr 127.0.0.1/32
+```
+
+## Release Automation
+
+Push a version tag to publish GitHub Release assets and GHCR images:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The release workflow verifies formatting, `go vet`, tests, race tests, and a
+release-script smoke build before publishing. It uploads cross-platform
+binaries from `dist/` to GitHub Releases and pushes `linux/amd64` plus
+`linux/arm64` images to `ghcr.io/6kmfi6hp/x-tunnel`. See
+[docs/release.md](docs/release.md) for tags, permissions, and rollback notes.
 
 ## Local WS Example
 
@@ -171,3 +211,9 @@ UDP block ports from `-block` must be comma-separated integers in `1-65535`; inv
 go test ./...
 go test -cover ./...
 ```
+
+## Code Organization
+
+The binary entrypoint lives under `cmd/x-tunnel`, with implementation packages
+under `internal`. See [docs/module-layout.md](docs/module-layout.md) for the
+current package boundaries and dependency rules.

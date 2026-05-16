@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+dist
+coverage.out
+x-tunnel
+*.test
+*.log
+tmp
+.DS_Store

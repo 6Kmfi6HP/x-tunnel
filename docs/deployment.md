@@ -137,3 +137,33 @@ For local development, keep the listener on loopback:
 ```bash
 ./x-tunnel -l ws://127.0.0.1:18080/tunnel -token local-test-token -cidr 127.0.0.1/32
 ```
+
+## Container Deployment
+
+Release images are published to GHCR from version tags:
+
+```bash
+docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.1.0
+docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.1.0 -version
+```
+
+The image runs as a non-root user. For exposed deployments, prefer mapping a
+loopback host port to an unprivileged container port, then terminate TLS in a
+reverse proxy on the host:
+
+```bash
+docker run -d --name x-tunnel-server \
+  -p 127.0.0.1:18080:18080 \
+  ghcr.io/6kmfi6hp/x-tunnel:v0.1.0 \
+  -l ws://0.0.0.0:18080/tunnel \
+  -token "$TOKEN" \
+  -cidr 203.0.113.0/24 \
+  -allow-target 10.0.0.0/8 \
+  -max-clients 64 \
+  -max-streams 256
+```
+
+If you run `wss://` inside the container, mount the certificate files and map a
+host port to an unprivileged container port, for example `-p 443:18443` with
+`-l wss://0.0.0.0:18443/tunnel`. For native binary releases and the exact CI
+publishing flow, see [release.md](release.md).
