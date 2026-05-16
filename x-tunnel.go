@@ -1503,6 +1503,9 @@ func socks5UserPassAuthSrv(conn net.Conn, username, password string) error {
 	if _, err := io.ReadFull(conn, response); err != nil {
 		return err
 	}
+	if response[0] != 0x01 {
+		return fmt.Errorf("SOCKS5 用户名密码认证响应版本错误: %d", response[0])
+	}
 	if response[1] != 0x00 {
 		return errors.New("认证失败")
 	}
@@ -1553,6 +1556,12 @@ func socks5Connect(conn net.Conn, addr string) error {
 	response := make([]byte, 4)
 	if _, err := io.ReadFull(conn, response); err != nil {
 		return err
+	}
+	if response[0] != 0x05 {
+		return fmt.Errorf("SOCKS5 CONNECT响应版本错误: %d", response[0])
+	}
+	if response[2] != 0x00 {
+		return fmt.Errorf("SOCKS5 CONNECT响应 RSV 必须为 0")
 	}
 	if response[1] != 0x00 {
 		return fmt.Errorf("状态码: %d", response[1])
@@ -1635,6 +1644,14 @@ func newSOCKS5UDPRelay(targetAddr string) (*SOCKS5UDPRelay, error) {
 	if _, err := io.ReadFull(tcpConn, resp); err != nil {
 		tcpConn.Close()
 		return nil, err
+	}
+	if resp[0] != 0x05 {
+		tcpConn.Close()
+		return nil, fmt.Errorf("UDP ASSOCIATE响应版本错误: %d", resp[0])
+	}
+	if resp[2] != 0x00 {
+		tcpConn.Close()
+		return nil, fmt.Errorf("UDP ASSOCIATE响应 RSV 必须为 0")
 	}
 	if resp[1] != 0x00 {
 		tcpConn.Close()

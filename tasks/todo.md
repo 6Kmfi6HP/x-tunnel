@@ -1043,6 +1043,21 @@ Verification:
 - `go test -cover -count=1 ./...`: pass, `coverage: 46.7% of statements`.
 - `go test -race -count=1 ./...`: pass.
 
+Post Phase 8 upstream SOCKS5 response header validation:
+
+- [x] Validate upstream SOCKS5 username/password auth response version.
+- [x] Validate upstream SOCKS5 CONNECT response `VER` and `RSV` bytes.
+- [x] Validate upstream SOCKS5 UDP ASSOCIATE response `VER` and `RSV` bytes.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(Socks5UserPassAuthSrvRejectsInvalidResponseVersion|Socks5ConnectRejectsInvalidResponseHeader|NewSOCKS5UDPRelayRejectsInvalidAssociateResponse)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 47.0% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
 Post Phase 8 integration metrics assertion precision:
 
 - [x] Replace substring-based metric value assertions with exact metric-name/value matching.

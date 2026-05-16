@@ -1328,6 +1328,29 @@ func TestSocks5UserPassAuthSrvRejectsOversizedCredentials(t *testing.T) {
 	}
 }
 
+func TestSocks5UserPassAuthSrvRejectsInvalidResponseVersion(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- socks5UserPassAuthSrv(client, "user", "pass")
+	}()
+
+	if got := readSOCKS5AuthRequest(t, server); got != "user:pass" {
+		t.Fatalf("SOCKS5 auth request = %q, want user:pass", got)
+	}
+	if _, err := server.Write([]byte{0x02, 0x00}); err != nil {
+		t.Fatalf("write invalid auth response version: %v", err)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("socks5UserPassAuthSrv accepted invalid auth response version")
+	}
+}
+
 func TestSocks5ConnectRejectsTruncatedBoundAddress(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -1344,6 +1367,36 @@ func TestSocks5ConnectRejectsTruncatedBoundAddress(t *testing.T) {
 
 	if err := socks5Connect(client, "127.0.0.1:80"); err == nil {
 		t.Fatal("socks5Connect accepted truncated bound IPv4 response")
+	}
+}
+
+func TestSocks5ConnectRejectsInvalidResponseHeader(t *testing.T) {
+	tests := []struct {
+		name     string
+		response []byte
+	}{
+		{name: "bad version", response: []byte{0x04, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 80}},
+		{name: "bad rsv", response: []byte{0x05, 0x00, 0x01, 0x01, 127, 0, 0, 1, 0, 80}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server, client := net.Pipe()
+			defer server.Close()
+			defer client.Close()
+			_ = server.SetDeadline(time.Now().Add(time.Second))
+			_ = client.SetDeadline(time.Now().Add(time.Second))
+
+			go func() {
+				req := make([]byte, 10)
+				_, _ = io.ReadFull(server, req)
+				_, _ = server.Write(tt.response)
+			}()
+
+			if err := socks5Connect(client, "127.0.0.1:80"); err == nil {
+				t.Fatal("socks5Connect accepted invalid response header")
+			}
+		})
 	}
 }
 
@@ -1373,6 +1426,8 @@ func TestNewSOCKS5UDPRelayRejectsInvalidAssociateResponse(t *testing.T) {
 		response []byte
 		want     string
 	}{
+		{name: "bad version", response: []byte{0x04, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 53}, want: "版本"},
+		{name: "bad rsv", response: []byte{0x05, 0x00, 0x01, 0x01, 127, 0, 0, 1, 0, 53}, want: "RSV"},
 		{name: "unknown address type", response: []byte{0x05, 0x00, 0x00, 0x09}, want: "地址类型无效"},
 		{name: "zero relay port", response: []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0, 0}, want: "端口"},
 	}
