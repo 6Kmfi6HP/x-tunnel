@@ -236,6 +236,7 @@ Limits:
 
 - `addr_len <= 65535`.
 - `payload_len <= 65535`.
+- `addr bytes` must be a valid non-empty `host:port` source address. DNS names and IP literals are accepted, and the port must be in `1..65535`.
 
 ## 9. SOCKS5 UDP Packet Format
 

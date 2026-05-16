@@ -234,6 +234,9 @@ func writeUDPReply(w io.Writer, addr string, payload []byte) error {
 	if len(addr) > 65535 {
 		return fmt.Errorf("地址过长")
 	}
+	if err := validateHostPort(addr); err != nil {
+		return fmt.Errorf("UDP 响应地址无效: %w", err)
+	}
 	if len(payload) > 65535 {
 		return fmt.Errorf("数据块过大")
 	}
@@ -295,11 +298,15 @@ func readUDPReply(r io.Reader) (string, []byte, error) {
 			return "", nil, err
 		}
 	}
+	addr := string(addrRaw)
+	if err := validateHostPort(addr); err != nil {
+		return "", nil, fmt.Errorf("UDP 响应地址无效: %w", err)
+	}
 	data := make([]byte, dataLen)
 	if dataLen > 0 {
 		if _, err := io.ReadFull(r, data); err != nil {
 			return "", nil, err
 		}
 	}
-	return string(addrRaw), data, nil
+	return addr, data, nil
 }

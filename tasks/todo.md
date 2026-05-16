@@ -1766,10 +1766,42 @@ Review:
 - Literal IP UDP resolution now has regression coverage proving strategy selection only affects DNS names.
 - Localhost family tests adapt to the address families present on the host, keeping the coverage portable.
 
+Post Phase 8 UDP reply frame address validation:
+
+- [x] Reject empty or malformed source addresses when writing internal UDP reply frames.
+- [x] Reject empty or malformed source addresses when reading internal UDP reply frames.
+- [x] Document the UDP reply frame address validity requirement.
+- [x] Add focused malformed read/write coverage.
+- [x] Run focused/full/coverage/race verification and commit.
+
 Verification:
 
-- Covered by the focused/full/coverage/race verification in the SOCKS5 UDP hostname strictness batch.
+- `git diff --check`: pass.
+- `go test -run 'Test(UDPReply|ReadUDPReplyMalformed|DialViaSocks5AuthProxy)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 61.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
 
 Review:
 
-- UDP resolution now has regression coverage for literal IP targets bypassing DNS and for localhost family-selection strategies where the local resolver exposes those address families.
+- Internal UDP reply frame write/read paths now reject empty or malformed source addresses before the payload is accepted.
+- The protocol doc now records that UDP reply `addr bytes` must be a valid non-empty `host:port` source address.
+
+Post Phase 8 upstream SOCKS5 dial coverage:
+
+- [x] Add direct `dialViaSocks5` coverage through an authenticated local SOCKS5 proxy.
+- [x] Verify the returned connection can exchange bytes with a TCP echo target.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestDialViaSocks5AuthProxy' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 61.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- `dialViaSocks5` now has direct coverage through an authenticated local SOCKS5 proxy.
+- The returned proxied TCP connection is verified with a real byte exchange against a one-shot TCP echo target.

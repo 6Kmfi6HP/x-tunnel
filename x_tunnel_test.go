@@ -1484,6 +1484,77 @@ func TestParseSOCKS5AddrRejectsOversizedAuth(t *testing.T) {
 	}
 }
 
+func TestDialViaSocks5AuthProxy(t *testing.T) {
+	targetAddr := startOneShotTCPEcho(t)
+	proxyAddr := startAuthSOCKS5TCPProxy(t, "user", "pass")
+
+	oldConfig := socks5Config
+	oldCfg := cfg
+	t.Cleanup(func() {
+		socks5Config = oldConfig
+		cfg = oldCfg
+	})
+	cfg.DialTimeout = time.Second
+	socks5Config = &SOCKS5Config{Host: proxyAddr, Username: "user", Password: "pass"}
+
+	conn, err := dialViaSocks5("tcp", targetAddr)
+	if err != nil {
+		t.Fatalf("dialViaSocks5 returned error: %v", err)
+	}
+	defer conn.Close()
+	if err := conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set dialViaSocks5 conn deadline: %v", err)
+	}
+	if _, err := conn.Write([]byte("ping")); err != nil {
+		t.Fatalf("write through dialViaSocks5 conn: %v", err)
+	}
+	reply := make([]byte, len("echo:ping"))
+	if _, err := io.ReadFull(conn, reply); err != nil {
+		t.Fatalf("read through dialViaSocks5 conn: %v", err)
+	}
+	if string(reply) != "echo:ping" {
+		t.Fatalf("dialViaSocks5 reply = %q, want echo:ping", reply)
+	}
+}
+
+func startOneShotTCPEcho(t *testing.T) string {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen TCP echo: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	done := make(chan error, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		buf := make([]byte, 64)
+		n, err := conn.Read(buf)
+		if err != nil {
+			done <- err
+			return
+		}
+		_, err = conn.Write(append([]byte("echo:"), buf[:n]...))
+		done <- err
+	}()
+	t.Cleanup(func() {
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("TCP echo failed: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("TCP echo did not finish")
+		}
+	})
+	return ln.Addr().String()
+}
+
 func TestSocks5HandshakeWithAuthOffersOnlyUserPass(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -4004,6 +4075,10 @@ func TestReadUDPReplyMalformed(t *testing.T) {
 		raw  []byte
 	}{
 		{name: "short header", raw: []byte{0, 1, 0}},
+		{name: "empty address", raw: rawUDPReplyFrame("", []byte("payload"))},
+		{name: "invalid address host", raw: rawUDPReplyFrame("bad_host.example:53", nil)},
+		{name: "invalid address port", raw: rawUDPReplyFrame("127.0.0.1:0", nil)},
+		{name: "missing address port", raw: rawUDPReplyFrame("127.0.0.1", nil)},
 		{name: "truncated address", raw: []byte{0, 4, 0, 0, '1', '.', '2'}},
 		{name: "truncated payload", raw: []byte{0, 0, 0, 4, 'd', 'n'}},
 	}
@@ -4017,12 +4092,27 @@ func TestReadUDPReplyMalformed(t *testing.T) {
 	}
 }
 
+func rawUDPReplyFrame(addr string, payload []byte) []byte {
+	b := []byte{byte(len(addr) >> 8), byte(len(addr)), byte(len(payload) >> 8), byte(len(payload))}
+	b = append(b, addr...)
+	b = append(b, payload...)
+	return b
+}
+
 func TestUDPReplyRejectsOversizedFields(t *testing.T) {
 	if err := writeUDPReply(io.Discard, strings.Repeat("x", 65536), nil); err == nil {
 		t.Fatal("writeUDPReply accepted oversized addr")
 	}
 	if err := writeUDPReply(io.Discard, "1.2.3.4:53", []byte(strings.Repeat("x", 65536))); err == nil {
 		t.Fatal("writeUDPReply accepted oversized payload")
+	}
+}
+
+func TestUDPReplyRejectsInvalidAddress(t *testing.T) {
+	for _, addr := range []string{"", "bad_host.example:53", "127.0.0.1:0", "127.0.0.1"} {
+		if err := writeUDPReply(io.Discard, addr, nil); err == nil {
+			t.Fatalf("writeUDPReply accepted invalid addr %q", addr)
+		}
 	}
 }
 
