@@ -2788,3 +2788,23 @@ Review:
 
 - `dialViaSocks5` now has local loopback proof for the no-proxy fallback path.
 - The fallback test exchanges bytes through a real TCP echo target, complementing the authenticated SOCKS5 proxy integration coverage.
+
+Post Phase 8 reconnect sleep helper coverage:
+
+- [x] Cover `sleepWithContext` zero-duration success and canceled paths.
+- [x] Cover `sleepWithContext` positive timer success path.
+- [x] Cover `randomDuration` returning zero for non-positive limits.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'Test(RandomDuration|SleepWithContext|ReconnectDelay|BaseReconnectDelay)' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Reconnect helper coverage now includes immediate zero-duration decisions, cancellation, and positive timer completion.
+- Jitter helper coverage now pins non-positive limits to a zero duration.

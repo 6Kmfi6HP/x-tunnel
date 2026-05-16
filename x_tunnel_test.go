@@ -131,6 +131,15 @@ func TestReconnectDelayJitterBounds(t *testing.T) {
 	}
 }
 
+func TestRandomDurationRejectsNonPositiveLimit(t *testing.T) {
+	if got := randomDuration(0); got != 0 {
+		t.Fatalf("randomDuration(0) = %s, want 0", got)
+	}
+	if got := randomDuration(-time.Second); got != 0 {
+		t.Fatalf("randomDuration(-1s) = %s, want 0", got)
+	}
+}
+
 func TestSleepWithContextCanceled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -140,6 +149,23 @@ func TestSleepWithContextCanceled(t *testing.T) {
 	}
 	if elapsed := time.Since(start); elapsed > 100*time.Millisecond {
 		t.Fatalf("sleepWithContext took too long after cancellation: %s", elapsed)
+	}
+}
+
+func TestSleepWithContextZeroDuration(t *testing.T) {
+	if !sleepWithContext(context.Background(), 0) {
+		t.Fatal("sleepWithContext returned false for zero duration with active context")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if sleepWithContext(ctx, 0) {
+		t.Fatal("sleepWithContext returned true for zero duration with canceled context")
+	}
+}
+
+func TestSleepWithContextTimer(t *testing.T) {
+	if !sleepWithContext(context.Background(), time.Millisecond) {
+		t.Fatal("sleepWithContext returned false after timer fired")
 	}
 }
 
