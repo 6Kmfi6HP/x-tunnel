@@ -5178,6 +5178,93 @@ func TestECHPoolOpenTCPStreamLegacyProxiesWithoutStatus(t *testing.T) {
 	}
 }
 
+func TestHandleLocalTCPProxiesOverSmux(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	})
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyPv4Pv6
+
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{protocolCapabilityTCPStatus},
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindTCP || strategy != IPStrategyPv4Pv6 || target != "tcp.example:443" {
+			serverDone <- fmt.Errorf("local TCP header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		if err := writeTCPOpenStatus(stream, tcpOpenStatusOK, ""); err != nil {
+			serverDone <- err
+			return
+		}
+		request := make([]byte, len("tcp-forward-request"))
+		if _, err := io.ReadFull(stream, request); err != nil {
+			serverDone <- err
+			return
+		}
+		if string(request) != "tcp-forward-request" {
+			serverDone <- fmt.Errorf("local TCP request = %q", request)
+			return
+		}
+		serverDone <- writeAll(stream, []byte("tcp-forward-response"))
+	}()
+
+	localServer, localClient := net.Pipe()
+	_ = localClient.SetDeadline(time.Now().Add(time.Second))
+	_ = localServer.SetDeadline(time.Now().Add(time.Second))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		handleLocalTCP(localServer, "tcp.example:443")
+	}()
+
+	if err := writeAll(localClient, []byte("tcp-forward-request")); err != nil {
+		t.Fatalf("write local TCP request: %v", err)
+	}
+	response := make([]byte, len("tcp-forward-response"))
+	if _, err := io.ReadFull(localClient, response); err != nil {
+		t.Fatalf("read local TCP response: %v", err)
+	}
+	if string(response) != "tcp-forward-response" {
+		t.Fatalf("local TCP response = %q, want tcp-forward-response", response)
+	}
+	_ = localClient.Close()
+
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server local TCP stream handler: %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for local TCP handler shutdown")
+	}
+}
+
 func TestECHPoolOpenBestStreamNoUsableSessions(t *testing.T) {
 	pool := &ECHPool{}
 	if _, _, _, _, err := pool.openBestStream(); err == nil {

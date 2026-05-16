@@ -2277,3 +2277,23 @@ Review:
 
 - Protocol hello, TCP open status, and smux open header writers now have fixed byte-level golden tests.
 - These tests complement round-trip coverage by detecting accidental wire-format drift even if readers and writers change together.
+
+Post Phase 8 local TCP forward handler coverage:
+
+- [x] Cover `handleLocalTCP` with `net.Pipe` and a real smux session.
+- [x] Verify the TCP open header and `TCPStatus OK` handshake.
+- [x] Verify request and response bytes are proxied through the smux stream.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleLocalTCPProxiesOverSmux|TestECHPoolOpenTCPStream(StatusOK|LegacyProxiesWithoutStatus)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 71.1% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Local TCP forwarding now has a short real-smux handler test in addition to subprocess integration coverage.
+- The test verifies the open header, TCP status handshake, and bidirectional payload forwarding through `proxyConnStream`.
