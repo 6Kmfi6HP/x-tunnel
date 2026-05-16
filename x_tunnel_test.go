@@ -1040,6 +1040,92 @@ func TestClientSessionLimitAllowsExistingClient(t *testing.T) {
 	}
 }
 
+func TestParseWSChannelMetadata(t *testing.T) {
+	cid, channelID, err := parseWSChannelMetadata(url.Values{})
+	if err != nil {
+		t.Fatalf("parseWSChannelMetadata empty returned error: %v", err)
+	}
+	if cid == "" {
+		t.Fatal("parseWSChannelMetadata empty returned empty generated client_id")
+	}
+	if channelID != 0 {
+		t.Fatalf("parseWSChannelMetadata empty channel = %d, want 0", channelID)
+	}
+
+	cid, channelID, err = parseWSChannelMetadata(url.Values{
+		"client_id":  {"client-123"},
+		"channel_id": {"7"},
+	})
+	if err != nil {
+		t.Fatalf("parseWSChannelMetadata valid returned error: %v", err)
+	}
+	if cid != "client-123" || channelID != 7 {
+		t.Fatalf("parseWSChannelMetadata valid = client %q channel %d, want client-123 channel 7", cid, channelID)
+	}
+}
+
+func TestParseWSChannelMetadataRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		name   string
+		values url.Values
+		want   string
+	}{
+		{
+			name:   "client id empty",
+			values: url.Values{"client_id": {""}},
+			want:   "client_id",
+		},
+		{
+			name:   "client id whitespace",
+			values: url.Values{"client_id": {"bad id"}},
+			want:   "client_id",
+		},
+		{
+			name:   "client id non ascii",
+			values: url.Values{"client_id": {"客户端"}},
+			want:   "client_id",
+		},
+		{
+			name:   "client id too long",
+			values: url.Values{"client_id": {strings.Repeat("a", maxWSClientIDLength+1)}},
+			want:   "过长",
+		},
+		{
+			name:   "channel id empty",
+			values: url.Values{"channel_id": {""}},
+			want:   "channel_id",
+		},
+		{
+			name:   "channel id non numeric",
+			values: url.Values{"channel_id": {"abc"}},
+			want:   "channel_id",
+		},
+		{
+			name:   "channel id negative",
+			values: url.Values{"channel_id": {"-1"}},
+			want:   "channel_id",
+		},
+		{
+			name:   "channel id too long",
+			values: url.Values{"channel_id": {strings.Repeat("9", maxWSChannelIDLength+1)}},
+			want:   "过长",
+		},
+		{
+			name:   "channel id overflow",
+			values: url.Values{"channel_id": {"18446744073709551616"}},
+			want:   "channel_id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, err := parseWSChannelMetadata(tt.values); err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("parseWSChannelMetadata err = %v, want containing %q", err, tt.want)
+			}
+		})
+	}
+}
+
 func newChannelTestWebSocket(t *testing.T) *websocket.Conn {
 	t.Helper()
 	client, server := newTestWSNetConnPair(t)

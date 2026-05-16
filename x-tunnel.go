@@ -2318,6 +2318,61 @@ type ClientSession struct {
 	activeStreams int
 }
 
+const (
+	maxWSClientIDLength  = 128
+	maxWSChannelIDLength = 20
+)
+
+func parseWSChannelMetadata(values url.Values) (string, uint64, error) {
+	cidValues, hasClientID := values["client_id"]
+	cid := ""
+	if hasClientID {
+		if len(cidValues) == 0 || cidValues[0] == "" {
+			return "", 0, fmt.Errorf("client_id 不能为空")
+		}
+		cid = cidValues[0]
+		if err := validateWSClientID(cid); err != nil {
+			return "", 0, err
+		}
+	} else {
+		cid = uuid.NewString()
+	}
+
+	var channelID uint64
+	if channelIDValues, ok := values["channel_id"]; ok {
+		if len(channelIDValues) == 0 || channelIDValues[0] == "" {
+			return "", 0, fmt.Errorf("channel_id 不能为空")
+		}
+		raw := channelIDValues[0]
+		if len(raw) > maxWSChannelIDLength {
+			return "", 0, fmt.Errorf("channel_id 过长")
+		}
+		for i := 0; i < len(raw); i++ {
+			if raw[i] < '0' || raw[i] > '9' {
+				return "", 0, fmt.Errorf("channel_id 必须是十进制整数")
+			}
+		}
+		parsed, err := strconv.ParseUint(raw, 10, 64)
+		if err != nil {
+			return "", 0, fmt.Errorf("channel_id 无效: %w", err)
+		}
+		channelID = parsed
+	}
+	return cid, channelID, nil
+}
+
+func validateWSClientID(value string) error {
+	if len(value) > maxWSClientIDLength {
+		return fmt.Errorf("client_id 过长")
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 33 || value[i] > 126 {
+			return fmt.Errorf("client_id 必须是可打印 ASCII 且不能包含空白字符")
+		}
+	}
+	return nil
+}
+
 func getOrCreateClientSession(clientID string) (*ClientSession, bool) {
 	serverSessionsMu.Lock()
 	defer serverSessionsMu.Unlock()
@@ -2485,19 +2540,14 @@ func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPN
 				return
 			}
 		}
+		cid, channelID, err := parseWSChannelMetadata(r.URL.Query())
+		if err != nil {
+			http.Error(w, "错误的请求", http.StatusBadRequest)
+			return
+		}
 		wsConn, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			return
-		}
-		cid := r.URL.Query().Get("client_id")
-		if cid == "" {
-			cid = uuid.NewString()
-		}
-		channelID := uint64(0)
-		if v := r.URL.Query().Get("channel_id"); v != "" {
-			if parsed, parseErr := strconv.ParseUint(v, 10, 64); parseErr == nil {
-				channelID = parsed
-			}
 		}
 		session, ok := getOrCreateClientSession(cid)
 		if !ok {

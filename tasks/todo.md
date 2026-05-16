@@ -2610,3 +2610,23 @@ Review:
 
 - DNS response parsing now rejects mismatched transaction IDs, unexpected question counts, truncated question sections, truncated answer sections, and malformed name compression.
 - The parser uses a shared bounded name skipper so question and answer names fail with explicit errors instead of silently falling through to an empty ECH result.
+
+Post Phase 8 WebSocket channel metadata validation:
+
+- [x] Extract WebSocket `client_id` / `channel_id` query parsing into a testable helper.
+- [x] Reject non-printable, whitespace, non-ASCII, or oversized `client_id` values.
+- [x] Reject malformed or overflowing `channel_id` values instead of silently auto-assigning.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestParseWSChannelMetadata|TestClientSessionChannelLifecycle|TestDialWebSocketWithECHWSMetadata|TestDialWebSocketWithECHWSSFallbackInsecure' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 74.5% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- WebSocket server handshake metadata is parsed before upgrade so malformed metadata can return HTTP 400 instead of being silently coerced.
+- `client_id` now rejects oversized, whitespace/control, and non-ASCII values; `channel_id` now rejects non-decimal and overflowing values.
