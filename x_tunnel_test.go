@@ -629,6 +629,21 @@ func TestQueryDoHRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
+func TestQueryDoHRejectsHTTPStatus(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	if _, err := queryDoH("example.com", server.URL); err == nil || !strings.Contains(err.Error(), "DoH 状态码: 503") {
+		t.Fatalf("queryDoH HTTP status err = %v", err)
+	}
+}
+
 func TestParseDNSResponseRejectsInvalidStatus(t *testing.T) {
 	seed, err := dnsHTTPSResponseSeed([]byte("ech"))
 	if err != nil {

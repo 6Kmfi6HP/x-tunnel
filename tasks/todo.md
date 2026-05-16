@@ -2531,3 +2531,22 @@ Review:
 
 - `probeChannelRTT` now has coverage for its continuous loop, not only the single ping helper.
 - The test proves real smux ping probes update `channelRTT` and the goroutine exits after the session closes.
+
+Post Phase 8 DoH HTTP status coverage:
+
+- [x] Cover `queryDoH` rejecting non-200 HTTP responses before DNS parsing.
+- [x] Keep the test on a local `httptest` DoH endpoint.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestQueryDoHRejects(HTTPStatus|OversizedResponse)|TestQueryHTTPSRecordDispatchesTransports' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 74.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- DoH lookup now has local HTTP coverage for non-200 status handling before DNS response parsing.
+- The test complements existing DoH success and oversized-response coverage.
