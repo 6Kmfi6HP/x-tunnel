@@ -2942,3 +2942,22 @@ Review:
 
 - `max-streams` rejection now returns explicit UDP open-status errors when the peer negotiated UDPStatus.
 - The WebSocket + smux test confirms TCPStatus remains intact and UDPStatus receives the same resource-limit reason instead of an opaque stream close.
+
+Post Phase 8 SOCKS5 UDP blocked-port drop coverage:
+
+- [x] Cover the UDP association loop dropping packets whose destination port is listed in `-block`.
+- [x] Prove a blocked packet records the client UDP address but does not bind a target or open/send a stream.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestUDPAssociationLoopDropsBlockedPort|TestUDPAssociationLoopSendsParsedPacketOverSmux|TestSOCKS5UDPPacketMalformed' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- The SOCKS5 UDP loop now has focused coverage for the default blocked-port behavior used to drop UDP/443 traffic.
+- The test proves blocked packets do not bind the association target or open a UDP smux stream.

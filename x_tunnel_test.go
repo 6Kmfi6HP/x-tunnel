@@ -7900,6 +7900,68 @@ func TestUDPAssociationLoopSendsParsedPacketOverSmux(t *testing.T) {
 	assoc.Close()
 }
 
+func TestUDPAssociationLoopDropsBlockedPort(t *testing.T) {
+	oldIPStrategy := ipStrategy
+	oldBlockPorts := udpBlockPorts
+	t.Cleanup(func() {
+		ipStrategy = oldIPStrategy
+		udpBlockPorts = oldBlockPorts
+	})
+	ipStrategy = IPStrategyDefault
+	udpBlockPorts = map[int]struct{}{443: {}}
+
+	relayConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen relay udp: %v", err)
+	}
+	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		_ = relayConn.Close()
+		t.Fatalf("listen client udp: %v", err)
+	}
+	defer clientConn.Close()
+
+	tcpServer, tcpClient := net.Pipe()
+	defer tcpClient.Close()
+	assoc := &UDPAssociation{
+		id:          4,
+		tcpConn:     tcpServer,
+		udpListener: relayConn,
+		channelID:   -1,
+	}
+	defer assoc.Close()
+
+	go assoc.loop()
+	packet, err := buildSOCKS5UDPPacket("8.8.8.8", 443, []byte("blocked-quic"))
+	if err != nil {
+		t.Fatalf("build SOCKS5 UDP packet: %v", err)
+	}
+	if _, err := clientConn.WriteToUDP(packet, relayConn.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("write SOCKS5 UDP packet: %v", err)
+	}
+
+	deadline := time.After(time.Second)
+	for {
+		assoc.mu.Lock()
+		clientSeen := assoc.clientUDPAddr != nil
+		receiving := assoc.receiving
+		target := assoc.target
+		stream := assoc.stream
+		assoc.mu.Unlock()
+		if clientSeen {
+			if receiving || target != "" || stream != nil {
+				t.Fatalf("blocked UDP packet bound association: receiving=%v target=%q stream=%v", receiving, target, stream)
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for blocked UDP packet to reach association loop")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
 func TestBuildSOCKS5UDPPacketRejectsOversizedDomain(t *testing.T) {
 	if _, err := buildSOCKS5UDPPacket(strings.Repeat("x", 256), 53, nil); err == nil {
 		t.Fatal("buildSOCKS5UDPPacket accepted oversized domain")
