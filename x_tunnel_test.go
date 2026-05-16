@@ -1713,6 +1713,37 @@ func TestHandleSOCKS5RejectsMissingNoAuthMethod(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5SelectsConfiguredMethod(t *testing.T) {
+	tests := []struct {
+		name    string
+		config  *ProxyConfig
+		methods []byte
+		want    []byte
+	}{
+		{
+			name:    "auth proxy selects userpass when no-auth is also offered",
+			config:  &ProxyConfig{Username: "user", Password: "pass"},
+			methods: []byte{0x00, 0x02},
+			want:    []byte{0x05, 0x02},
+		},
+		{
+			name:    "no-auth proxy selects no-auth when userpass is also offered",
+			config:  &ProxyConfig{},
+			methods: []byte{0x02, 0x00},
+			want:    []byte{0x05, 0x00},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := socks5MethodSelection(t, tt.config, tt.methods)
+			if !bytes.Equal(got, tt.want) {
+				t.Fatalf("SOCKS5 method selection = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func socks5MethodSelection(t *testing.T, cfgp *ProxyConfig, methods []byte) []byte {
 	t.Helper()
 	if len(methods) > 255 {

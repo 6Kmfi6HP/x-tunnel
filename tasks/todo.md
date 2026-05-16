@@ -1126,3 +1126,16 @@ Verification:
 - `go test -run 'Test(TargetPolicy|ParseTargetPolicy|ValidateServerStartupConfig|IntegrationTCPStatusRejectsBlockedTarget)' -count=1 ./...`: pass.
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 47.3% of statements`.
+
+Post Phase 8 SOCKS5 method preference regression tests:
+
+- [x] Confirm existing method rejection logic covers missing no-auth and missing user/pass methods.
+- [x] Add regression coverage for multi-method greetings selecting the configured method.
+- [x] Run focused SOCKS5/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSOCKS5(RejectsMissingUserPassMethod|RejectsMissingNoAuthMethod|SelectsConfiguredMethod|UserPassAuthRejectsInvalidVersion|UserPassAuthRejectsShortRequest)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 47.3% of statements`.
