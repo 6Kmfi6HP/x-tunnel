@@ -1934,9 +1934,46 @@ Review:
 - DNS ECH lookup now has real loopback UDP transport coverage returning a parsed HTTPS/ECH answer.
 - `queryHTTPSRecord` dispatch is covered for both UDP DNS and DoH success paths, including the DoH `dns` query parameter and DNS message accept header.
 
+Post Phase 8 UDP DNS large ECH response:
+
+- [x] Increase UDP DNS response reads beyond the old 4096-byte buffer to the DNS message limit.
+- [x] Add loopback UDP DNS coverage for an HTTPS/ECH answer larger than 4096 bytes.
+- [x] Preserve existing DoH maximum response behavior.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(QueryDNSUDPReturnsECH|QueryDNSUDPReadsLargeECHResponse|QueryHTTPSRecordDispatchesTransports|QueryDoHRejectsOversizedResponse)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 64.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- UDP DNS ECH lookups now read up to the DNS message limit instead of truncating responses at 4096 bytes.
+- Loopback UDP DNS coverage proves large HTTPS/ECH answers are parsed end-to-end, while the DoH oversized-response guard remains covered.
+
 Commit frequency and quality assessment:
 
-- [ ] Collect commit cadence, author, and churn metrics from Git history.
-- [ ] Inspect commit message style, commit size distribution, and test/doc coupling.
-- [ ] Sample repository quality signals from tests, CI, and recent diffs.
-- [ ] Summarize engineering-level assessment with evidence, caveats, and improvement suggestions.
+- [x] Collect commit cadence, author, and churn metrics from Git history.
+- [x] Inspect commit message style, commit size distribution, and test/doc coupling.
+- [x] Sample repository quality signals from tests, CI, and recent diffs.
+- [x] Summarize engineering-level assessment with evidence, caveats, and improvement suggestions.
+
+Verification:
+
+- `git log --all --date=iso-strict --numstat`: assessed 124 commits from 2026-05-16 03:37:55+07:00 to 10:14:20+07:00.
+- `git diff --check`: pass.
+- `go test -count=1 -timeout=2m ./...`: pass.
+- `go test -cover -count=1 -timeout=2m ./...`: pass, `coverage: 64.7% of statements`.
+- `go test -race -count=1 -timeout=3m ./...`: pass.
+- `go vet ./...`: pass.
+- `gofmt -l *.go`: pass, no files listed.
+
+Review:
+
+- Commit cadence is an extreme single-day burst: 124 commits in 6.61 hours, median gap 3.03 minutes.
+- Commit hygiene is strong for small, typed commits: no WIP/fixup subjects found; prefixes are `fix`, `test`, `docs`, `feat`, `chore`, `refactor`, and `ci`.
+- Engineering quality signals are strongest around tests, CI, edge-case hardening, race checks, fuzz smoke checks, and verification logging.
+- Main maintainability risk is code organization: `x-tunnel.go` is 4307 lines with 161 functions, including several 100+ line functions.

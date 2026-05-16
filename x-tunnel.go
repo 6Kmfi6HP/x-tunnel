@@ -2111,7 +2111,7 @@ func queryDNSUDP(domain, dnsServer string) (string, error) {
 		return "", fmt.Errorf("发送查询失败: %v", err)
 	}
 
-	response := make([]byte, 4096)
+	response := make([]byte, maxDNSMessageSize)
 	n, err := conn.Read(response)
 	if err != nil {
 		if netErr, ok := err.(net.Error); ok && netErr.Timeout() {

@@ -573,6 +573,22 @@ func TestQueryDNSUDPReturnsECH(t *testing.T) {
 	}
 }
 
+func TestQueryDNSUDPReadsLargeECHResponse(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	largeECH := bytes.Repeat([]byte("x"), 5000)
+	addr := startDNSUDPResponder(t, largeECH)
+	got, err := queryDNSUDP("example.com", addr)
+	if err != nil {
+		t.Fatalf("queryDNSUDP large ECH returned error: %v", err)
+	}
+	if want := base64.StdEncoding.EncodeToString(largeECH); got != want {
+		t.Fatalf("queryDNSUDP large ECH length = %d, want %d", len(got), len(want))
+	}
+}
+
 func TestQueryHTTPSRecordDispatchesTransports(t *testing.T) {
 	oldCfg := cfg
 	defer func() { cfg = oldCfg }()
