@@ -598,6 +598,9 @@ func TestIntegrationTCPStatusRejectsBlockedTarget(t *testing.T) {
 	}
 	waitLogContains(t, ctx, serverLog, "TCP 拒绝", server)
 	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total", "2")
+	assertNoUDPResponseViaSOCKS5(t, socksAddr, "127.0.0.1:53", []byte("blocked"))
+	waitLogContains(t, ctx, serverLog, "UDP 拒绝", server)
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total", "3")
 }
 
 type xtunnelProcess struct {
@@ -1250,40 +1253,91 @@ func startUDPEcho(t *testing.T) string {
 
 func fetchUDPViaSOCKS5(t *testing.T, proxyAddr, targetAddr string, payload []byte) []byte {
 	t.Helper()
+	udpConn, relayAddr, cleanup := openSOCKS5UDPAssociation(t, proxyAddr)
+	defer cleanup()
+	writeUDPViaSOCKS5Relay(t, udpConn, relayAddr, targetAddr, payload)
+
+	buf := make([]byte, 2048)
+	n, _, err := udpConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read UDP response: %v", err)
+	}
+	_, gotPayload, err := parseSOCKS5UDPPacket(buf[:n])
+	if err != nil {
+		t.Fatalf("parse SOCKS5 UDP response: %v", err)
+	}
+	return gotPayload
+}
+
+func assertNoUDPResponseViaSOCKS5(t *testing.T, proxyAddr, targetAddr string, payload []byte) {
+	t.Helper()
+	udpConn, relayAddr, cleanup := openSOCKS5UDPAssociation(t, proxyAddr)
+	defer cleanup()
+	writeUDPViaSOCKS5Relay(t, udpConn, relayAddr, targetAddr, payload)
+	if err := udpConn.SetDeadline(time.Now().Add(750 * time.Millisecond)); err != nil {
+		t.Fatalf("set blocked UDP deadline: %v", err)
+	}
+
+	buf := make([]byte, 2048)
+	n, _, err := udpConn.ReadFromUDP(buf)
+	if err == nil {
+		t.Fatalf("received UDP response for blocked target: %x", buf[:n])
+	}
+	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
+		t.Fatalf("read blocked UDP response error = %v, want timeout", err)
+	}
+}
+
+func openSOCKS5UDPAssociation(t *testing.T, proxyAddr string) (*net.UDPConn, *net.UDPAddr, func()) {
+	t.Helper()
 	control, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
 	if err != nil {
 		t.Fatalf("dial SOCKS5 proxy: %v", err)
 	}
-	defer control.Close()
 	if err := control.SetDeadline(time.Now().Add(integrationIOTimeout)); err != nil {
+		_ = control.Close()
 		t.Fatalf("set SOCKS5 control deadline: %v", err)
 	}
 
 	if _, err := control.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		_ = control.Close()
 		t.Fatalf("write SOCKS5 greeting: %v", err)
 	}
 	greeting := make([]byte, 2)
 	if _, err := io.ReadFull(control, greeting); err != nil {
+		_ = control.Close()
 		t.Fatalf("read SOCKS5 greeting: %v", err)
 	}
 	if !bytes.Equal(greeting, []byte{0x05, 0x00}) {
+		_ = control.Close()
 		t.Fatalf("SOCKS5 greeting = %v", greeting)
 	}
 
 	if _, err := control.Write([]byte{0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+		_ = control.Close()
 		t.Fatalf("write UDP associate: %v", err)
 	}
 	relayAddr := readSOCKS5BoundAddr(t, control, proxyAddr)
 
 	udpConn, err := net.ListenUDP("udp", nil)
 	if err != nil {
+		_ = control.Close()
 		t.Fatalf("listen local UDP: %v", err)
 	}
-	defer udpConn.Close()
 	if err := udpConn.SetDeadline(time.Now().Add(integrationIOTimeout)); err != nil {
+		_ = udpConn.Close()
+		_ = control.Close()
 		t.Fatalf("set UDP deadline: %v", err)
 	}
+	cleanup := func() {
+		_ = udpConn.Close()
+		_ = control.Close()
+	}
+	return udpConn, relayAddr, cleanup
+}
 
+func writeUDPViaSOCKS5Relay(t *testing.T, udpConn *net.UDPConn, relayAddr *net.UDPAddr, targetAddr string, payload []byte) {
+	t.Helper()
 	host, portStr, err := net.SplitHostPort(targetAddr)
 	if err != nil {
 		t.Fatalf("split UDP target: %v", err)
@@ -1299,17 +1353,6 @@ func fetchUDPViaSOCKS5(t *testing.T, proxyAddr, targetAddr string, payload []byt
 	if _, err := udpConn.WriteToUDP(packet, relayAddr); err != nil {
 		t.Fatalf("write UDP packet to SOCKS5 relay: %v", err)
 	}
-
-	buf := make([]byte, 2048)
-	n, _, err := udpConn.ReadFromUDP(buf)
-	if err != nil {
-		t.Fatalf("read UDP response: %v", err)
-	}
-	_, gotPayload, err := parseSOCKS5UDPPacket(buf[:n])
-	if err != nil {
-		t.Fatalf("parse SOCKS5 UDP response: %v", err)
-	}
-	return gotPayload
 }
 
 func readSOCKS5BoundAddr(t *testing.T, r io.Reader, proxyAddr string) *net.UDPAddr {

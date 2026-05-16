@@ -1300,3 +1300,23 @@ Review:
 
 - Local SOCKS5 and HTTP proxy responses now complete progressive short writes and expose silent short writes as `io.ErrShortWrite` through shared helpers.
 - UDP ASSOCIATE replies now validate the response address and port before writing the protocol frame.
+
+Post Phase 8 SOCKS5 UDP target-policy integration:
+
+- [x] Reuse the SOCKS5 UDP integration setup so success and no-response cases share the same handshake path.
+- [x] Assert a blocked SOCKS5 UDP target produces no UDP response.
+- [x] Assert blocked UDP increments `x_tunnel_server_target_rejections_total` and logs `UDP 拒绝`.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestIntegrationTCPStatusRejectsBlockedTarget$' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 53.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- The target-policy integration now proves blocked SOCKS5 UDP targets do not receive relay responses.
+- The same test asserts UDP rejections are observable through both server logs and `x_tunnel_server_target_rejections_total`.
