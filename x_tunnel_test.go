@@ -5453,6 +5453,59 @@ func TestHandleSmuxStreamUDPProxiesDatagram(t *testing.T) {
 	}
 }
 
+func TestHandleSmuxStreamUDPStatusOKBeforeDatagrams(t *testing.T) {
+	oldCfg := cfg
+	oldTargetPolicy := targetPolicy
+	oldSocks5Config := socks5Config
+	t.Cleanup(func() {
+		cfg = oldCfg
+		targetPolicy = oldTargetPolicy
+		socks5Config = oldSocks5Config
+	})
+	cfg.DialTimeout = time.Second
+	cfg.UDPReadTimeout = 20 * time.Millisecond
+	targetPolicy = nil
+	socks5Config = nil
+
+	targetAddr := startUDPEcho(t)
+	clientStream, serverStream := openAcceptedSmuxTestStreamWithHeader(t, streamKindUDP, IPStrategyDefault, targetAddr)
+	done := make(chan struct{})
+	session := &ClientSession{clientID: "udp-status-success-test", channels: make(map[uint64]*WSChannel)}
+	ch := &WSChannel{id: 1, session: session, capabilities: protocolCapabilityUDPStatus}
+	go func() {
+		defer close(done)
+		handleSmuxStream(session, ch, serverStream)
+	}()
+
+	if err := clientStream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set client stream deadline: %v", err)
+	}
+	status, message, err := readUDPOpenStatus(clientStream)
+	if err != nil {
+		t.Fatalf("read UDP open status: %v", err)
+	}
+	if status != udpOpenStatusOK || message != "" {
+		t.Fatalf("UDP open status = %d %q, want OK empty message", status, message)
+	}
+	if err := writeChunk(clientStream, []byte("dns-status")); err != nil {
+		t.Fatalf("write UDP smux chunk: %v", err)
+	}
+	addr, payload, err := readUDPReply(clientStream)
+	if err != nil {
+		t.Fatalf("read UDP smux reply: %v", err)
+	}
+	if addr != targetAddr || string(payload) != "echo:dns-status" {
+		t.Fatalf("UDP smux reply = addr %q payload %q, want %q echo:dns-status", addr, payload, targetAddr)
+	}
+	_ = clientStream.Close()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for UDPStatus smux success handler")
+	}
+}
+
 func TestHandleSmuxStreamHelloDeadline(t *testing.T) {
 	oldCfg := cfg
 	oldProtocolFailures := atomic.LoadUint64(&serverProtocolFailureSeq)

@@ -2827,3 +2827,22 @@ Review:
 
 - UDPStatus now has explicit legacy compatibility coverage: channels without the capability do not wait for any status frame.
 - The test protects the original UDP stream open header behavior for old peers.
+
+Post Phase 8 UDPStatus server success path:
+
+- [x] Cover `handleSmuxStream` writing UDP open status OK before proxied datagrams.
+- [x] Prove UDPStatus success still proxies a loopback UDP datagram and reply.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestHandleSmuxStreamUDP|TestECHPoolOpenUDPStream|TestUDPOpenStatus' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Server-side UDPStatus success now has loopback smux coverage: OK status is sent before any UDP chunk handling.
+- The test confirms the status frame does not disturb subsequent UDP datagram proxying and reply framing.
