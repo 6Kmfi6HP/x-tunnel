@@ -1355,7 +1355,7 @@ func (c *wsNetConn) Write(p []byte) (int, error) {
 		c.signalDead(err)
 		return 0, err
 	}
-	n, writeErr := w.Write(p)
+	n, writeErr := writeAllCount(w, p)
 	closeErr := w.Close()
 	if writeErr != nil {
 		c.signalDead(writeErr)
@@ -1620,9 +1620,35 @@ func (d *DirectUDPRelayer) Read(buffer []byte) (int, string, error) {
 	}
 	return n, addr.String(), err
 }
-func (d *DirectUDPRelayer) Write(data []byte) (int, error)    { return d.conn.WriteToUDP(data, d.target) }
+func (d *DirectUDPRelayer) Write(data []byte) (int, error) {
+	return writeUDPDatagram(d.conn, data, d.target)
+}
 func (d *DirectUDPRelayer) SetReadDeadline(t time.Time) error { return d.conn.SetReadDeadline(t) }
 func (d *DirectUDPRelayer) Close() error                      { return d.conn.Close() }
+
+type udpDatagramWriter interface {
+	WriteToUDP([]byte, *net.UDPAddr) (int, error)
+}
+
+func writeUDPDatagram(w udpDatagramWriter, data []byte, addr *net.UDPAddr) (int, error) {
+	if w == nil {
+		return 0, errors.New("UDP writer 未初始化")
+	}
+	if addr == nil {
+		return 0, errors.New("UDP 目标地址为空")
+	}
+	n, err := w.WriteToUDP(data, addr)
+	if n > len(data) {
+		return n, io.ErrShortWrite
+	}
+	if err != nil {
+		return n, err
+	}
+	if n != len(data) {
+		return n, io.ErrShortWrite
+	}
+	return n, nil
+}
 
 type SOCKS5UDPRelay struct {
 	tcpConn    net.Conn
@@ -1754,7 +1780,7 @@ func (r *SOCKS5UDPRelay) Write(data []byte) (int, error) {
 		return 0, errors.New("closed")
 	}
 	pkt := buildSOCKS5UDPPacketData(r.targetAddr, data)
-	return r.udpConn.WriteToUDP(pkt, r.relayAddr)
+	return writeUDPDatagram(r.udpConn, pkt, r.relayAddr)
 }
 
 func (r *SOCKS5UDPRelay) Read(buffer []byte) (int, string, error) {
@@ -3856,7 +3882,7 @@ func (a *UDPAssociation) handleUDPResponse(addrStr string, data []byte) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.clientUDPAddr != nil {
-		_, _ = a.udpListener.WriteToUDP(pkt, a.clientUDPAddr)
+		_, _ = writeUDPDatagram(a.udpListener, pkt, a.clientUDPAddr)
 	}
 }
 

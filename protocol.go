@@ -257,22 +257,29 @@ func writeUDPReply(w io.Writer, addr string, payload []byte) error {
 }
 
 func writeAll(w io.Writer, b []byte) error {
+	_, err := writeAllCount(w, b)
+	return err
+}
+
+func writeAllCount(w io.Writer, b []byte) (int, error) {
+	total := 0
 	for len(b) > 0 {
 		n, err := w.Write(b)
 		if n > len(b) {
-			return io.ErrShortWrite
+			return total, io.ErrShortWrite
 		}
 		if n > 0 {
+			total += n
 			b = b[n:]
 		}
 		if err != nil {
-			return err
+			return total, err
 		}
 		if n == 0 {
-			return io.ErrShortWrite
+			return total, io.ErrShortWrite
 		}
 	}
-	return nil
+	return total, nil
 }
 
 func readUDPReply(r io.Reader) (string, []byte, error) {

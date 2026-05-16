@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -3105,6 +3106,97 @@ func TestUDPReplyRejectsOversizedFields(t *testing.T) {
 	}
 }
 
+type udpDatagramWriteFunc func([]byte, *net.UDPAddr) (int, error)
+
+func (f udpDatagramWriteFunc) WriteToUDP(p []byte, addr *net.UDPAddr) (int, error) {
+	return f(p, addr)
+}
+
+func TestWriteUDPDatagramWritesFullPayload(t *testing.T) {
+	target := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+	payload := []byte("payload")
+	var gotPayload []byte
+	var gotAddr *net.UDPAddr
+	writer := udpDatagramWriteFunc(func(p []byte, addr *net.UDPAddr) (int, error) {
+		gotPayload = append([]byte(nil), p...)
+		gotAddr = addr
+		return len(p), nil
+	})
+
+	n, err := writeUDPDatagram(writer, payload, target)
+	if err != nil {
+		t.Fatalf("writeUDPDatagram returned error: %v", err)
+	}
+	if n != len(payload) {
+		t.Fatalf("writeUDPDatagram n = %d, want %d", n, len(payload))
+	}
+	if !bytes.Equal(gotPayload, payload) {
+		t.Fatalf("UDP payload = %q, want %q", gotPayload, payload)
+	}
+	if gotAddr != target {
+		t.Fatalf("UDP target = %v, want %v", gotAddr, target)
+	}
+}
+
+func TestWriteUDPDatagramRejectsShortWrites(t *testing.T) {
+	target := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+	payload := []byte("payload")
+	tests := []struct {
+		name string
+		n    int
+	}{
+		{name: "short", n: len(payload) - 1},
+		{name: "over", n: len(payload) + 1},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			writer := udpDatagramWriteFunc(func([]byte, *net.UDPAddr) (int, error) {
+				return tt.n, nil
+			})
+			n, err := writeUDPDatagram(writer, payload, target)
+			if !errors.Is(err, io.ErrShortWrite) {
+				t.Fatalf("writeUDPDatagram error = %v, want %v", err, io.ErrShortWrite)
+			}
+			if n != tt.n {
+				t.Fatalf("writeUDPDatagram n = %d, want %d", n, tt.n)
+			}
+		})
+	}
+}
+
+func TestWriteUDPDatagramPropagatesErrors(t *testing.T) {
+	target := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+	payload := []byte("payload")
+	wantErr := errors.New("write failed")
+	writer := udpDatagramWriteFunc(func([]byte, *net.UDPAddr) (int, error) {
+		return 3, wantErr
+	})
+
+	n, err := writeUDPDatagram(writer, payload, target)
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("writeUDPDatagram error = %v, want %v", err, wantErr)
+	}
+	if n != 3 {
+		t.Fatalf("writeUDPDatagram n = %d, want 3", n)
+	}
+}
+
+func TestWriteUDPDatagramRejectsInvalidInputs(t *testing.T) {
+	target := &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 53}
+	payload := []byte("payload")
+	writer := udpDatagramWriteFunc(func(p []byte, _ *net.UDPAddr) (int, error) {
+		return len(p), nil
+	})
+
+	if _, err := writeUDPDatagram(nil, payload, target); err == nil {
+		t.Fatal("writeUDPDatagram accepted nil writer")
+	}
+	if _, err := writeUDPDatagram(writer, payload, nil); err == nil {
+		t.Fatal("writeUDPDatagram accepted nil target")
+	}
+}
+
 type shortWriteNoErrorWriter struct{}
 
 func (shortWriteNoErrorWriter) Write(p []byte) (int, error) {
@@ -3329,6 +3421,30 @@ func TestWriteAllHandlesProgressiveShortWrites(t *testing.T) {
 	}
 	if got := w.String(); got != "payload" {
 		t.Fatalf("writeAll wrote %q, want payload", got)
+	}
+}
+
+func TestWriteAllCountHandlesProgressiveShortWrites(t *testing.T) {
+	var w oneByteWriter
+	n, err := writeAllCount(&w, []byte("payload"))
+	if err != nil {
+		t.Fatalf("writeAllCount returned error: %v", err)
+	}
+	if n != len("payload") {
+		t.Fatalf("writeAllCount wrote %d bytes, want %d", n, len("payload"))
+	}
+	if got := w.String(); got != "payload" {
+		t.Fatalf("writeAllCount wrote %q, want payload", got)
+	}
+}
+
+func TestWriteAllCountRejectsShortWritesWithoutProgress(t *testing.T) {
+	n, err := writeAllCount(shortWriteNoErrorWriter{}, []byte("payload"))
+	if err != io.ErrShortWrite {
+		t.Fatalf("writeAllCount error = %v, want %v", err, io.ErrShortWrite)
+	}
+	if n != len("payload")-1 {
+		t.Fatalf("writeAllCount wrote %d bytes, want %d", n, len("payload")-1)
 	}
 }
 

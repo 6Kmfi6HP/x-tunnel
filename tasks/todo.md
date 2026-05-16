@@ -1320,3 +1320,43 @@ Review:
 
 - The target-policy integration now proves blocked SOCKS5 UDP targets do not receive relay responses.
 - The same test asserts UDP rejections are observable through both server logs and `x_tunnel_server_target_rejections_total`.
+
+Post Phase 8 UDP datagram short-write checks:
+
+- [x] Add a shared UDP datagram writer that rejects silent short writes.
+- [x] Use the helper for direct UDP relays, upstream SOCKS5 UDP relays, and local SOCKS5 UDP responses.
+- [x] Add focused tests for short writes, impossible over-writes, normal writes, and error propagation.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(WriteUDPDatagram|UDPAssociationHandleUDPResponseRejectsInvalidPort|UDPAssociationSendWritesBoundTarget|UDPAssociationSendDropsChangedTarget|WriteAllCount|WriteAllHandlesProgressiveShortWrites)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 53.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- UDP datagram writes now treat silent short writes and impossible byte counts as `io.ErrShortWrite`.
+- Direct UDP relay writes, upstream SOCKS5 UDP relay writes, and SOCKS5 UDP client response writes share the same guard.
+
+Post Phase 8 WebSocket frame short-write handling:
+
+- [x] Add a counted `writeAll` helper so `net.Conn`-style writers can preserve bytes-written semantics.
+- [x] Use the counted helper in `wsNetConn.Write` to complete progressive WebSocket frame short writes.
+- [x] Return `io.ErrShortWrite` from WebSocket frame writes that stop making progress.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(WriteUDPDatagram|UDPAssociationHandleUDPResponseRejectsInvalidPort|UDPAssociationSendWritesBoundTarget|UDPAssociationSendDropsChangedTarget|WriteAllCount|WriteAllHandlesProgressiveShortWrites)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 53.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- `wsNetConn.Write` now uses counted full-write behavior while preserving the `net.Conn` byte-count return contract.
+- The shared counted writer keeps the original `writeAll` API simple for protocol encoders.
