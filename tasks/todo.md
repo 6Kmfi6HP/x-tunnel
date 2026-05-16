@@ -2473,3 +2473,9 @@ Review:
 
 - HTTP CONNECT now has short real-smux coverage for both remote TCPStatus success and remote TCPStatus error paths.
 - A remote TCP open failure maps to local `502 Bad Gateway` with an empty body instead of starting an opaque tunnel.
+
+Post Phase 8 HTTP request TCPStatus error mapping:
+
+- [ ] Cover non-CONNECT `handleHTTP` when `openTCPStream` returns a negotiated TCPStatus error.
+- [ ] Verify the local response is `502 Bad Gateway` before any request bytes are forwarded.
+- [ ] Run focused/full/coverage/race verification and commit.
