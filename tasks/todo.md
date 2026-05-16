@@ -1994,6 +1994,26 @@ Review:
 - `wss://` dialing now has a direct local TLS WebSocket test for the fallback standard-TLS branch.
 - The WSS test proves insecure self-signed TLS can upgrade successfully while still carrying token subprotocol and channel metadata.
 
+Post Phase 8 ECHPool stream open protocol coverage:
+
+- [x] Cover `openUDPStream` writing a UDP smux open header with the configured IP strategy.
+- [x] Cover `openTCPStream` reading a negotiated TCPStatus error from the server side.
+- [x] Verify channel ID and decision metadata from stream selection.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestECHPoolOpen(UDPStreamWritesHeader|TCPStreamStatusError)|TestNegotiateClientProtocol' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 66.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Client stream opening now has direct protocol coverage for UDP open headers, including the selected IP strategy and target authority.
+- Negotiated TCPStatus error handling is covered at the ECHPool boundary, keeping local proxy failure mapping grounded in the stream-open path.
+
 Commit frequency and quality assessment:
 
 - [x] Collect commit cadence, author, and churn metrics from Git history.

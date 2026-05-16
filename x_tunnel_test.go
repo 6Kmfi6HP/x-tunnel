@@ -4558,6 +4558,105 @@ func TestNegotiateClientProtocolLegacyClose(t *testing.T) {
 	}
 }
 
+func TestECHPoolOpenUDPStreamWritesHeader(t *testing.T) {
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() { ipStrategy = oldIPStrategy })
+	ipStrategy = IPStrategyPv4Pv6
+
+	pool := &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{currentProtocolCapabilities()},
+	}
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindUDP || strategy != IPStrategyPv4Pv6 || target != "example.com:53" {
+			serverDone <- fmt.Errorf("udp open header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	stream, chID, decision, err := pool.openUDPStream("example.com:53")
+	if err != nil {
+		t.Fatalf("openUDPStream returned error: %v", err)
+	}
+	_ = stream.Close()
+	if chID != 1 || decision != 1 {
+		t.Fatalf("openUDPStream chID=%d decision=%d, want 1/1", chID, decision)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server read UDP open header: %v", err)
+	}
+}
+
+func TestECHPoolOpenTCPStreamStatusError(t *testing.T) {
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() {
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	})
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyIPv6Only
+
+	pool := &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{protocolCapabilityTCPStatus},
+	}
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindTCP || strategy != IPStrategyIPv6Only || target != "blocked.example:443" {
+			serverDone <- fmt.Errorf("tcp open header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		serverDone <- writeTCPOpenStatus(stream, tcpOpenStatusError, "blocked by policy")
+	}()
+
+	if stream, chID, decision, err := pool.openTCPStream("blocked.example:443"); err == nil {
+		_ = stream.Close()
+		t.Fatalf("openTCPStream succeeded with chID=%d decision=%d, want remote status error", chID, decision)
+	} else if !strings.Contains(err.Error(), "blocked by policy") {
+		t.Fatalf("openTCPStream error = %v, want blocked by policy", err)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server TCP status handler: %v", err)
+	}
+}
+
 func TestIsLegacyProtocolHelloError(t *testing.T) {
 	tests := []struct {
 		name string
