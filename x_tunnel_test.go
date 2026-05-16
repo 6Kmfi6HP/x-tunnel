@@ -2036,6 +2036,50 @@ func TestDialTCPWithStrategyLocalhostFamilies(t *testing.T) {
 	}
 }
 
+func TestDialTCPWithStrategyPreferredFamilies(t *testing.T) {
+	oldCfg := cfg
+	t.Cleanup(func() { cfg = oldCfg })
+	cfg.DialTimeout = time.Second
+
+	covered := false
+	if localhostHasFamily(t, false) {
+		v4Addr := startOneShotTCPEchoOn(t, "tcp4", "127.0.0.1:0")
+		_, v4Port, err := net.SplitHostPort(v4Addr)
+		if err != nil {
+			t.Fatalf("split IPv4 listener address: %v", err)
+		}
+		conn, err := dialTCPWithStrategy(net.JoinHostPort("localhost", v4Port), IPStrategyPv4Pv6)
+		if err != nil {
+			t.Fatalf("dialTCPWithStrategy IPv4-preferred localhost returned error: %v", err)
+		}
+		assertTCPEcho(t, conn, "localhost-prefer-v4")
+		covered = true
+	}
+
+	if localhostHasFamily(t, true) {
+		v6Ln, err := net.Listen("tcp6", "[::1]:0")
+		if err != nil {
+			t.Logf("IPv6 loopback listener unavailable: %v", err)
+		} else {
+			v6Addr := startOneShotTCPEchoWithListener(t, v6Ln)
+			_, v6Port, err := net.SplitHostPort(v6Addr)
+			if err != nil {
+				t.Fatalf("split IPv6 listener address: %v", err)
+			}
+			conn, err := dialTCPWithStrategy(net.JoinHostPort("localhost", v6Port), IPStrategyPv6Pv4)
+			if err != nil {
+				t.Fatalf("dialTCPWithStrategy IPv6-preferred localhost returned error: %v", err)
+			}
+			assertTCPEcho(t, conn, "localhost-prefer-v6")
+			covered = true
+		}
+	}
+
+	if !covered {
+		t.Skip("localhost has no usable preferred TCP family")
+	}
+}
+
 func localhostHasFamily(t *testing.T, ipv6 bool) bool {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)

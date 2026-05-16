@@ -2134,6 +2134,26 @@ Review:
 
 - Protocol docs now describe ECH resolver transports, DoH authority restrictions, DNS response status requirements, and UDP DNS message-size reads.
 
+Post Phase 8 TCP preferred-family dial coverage:
+
+- [x] Cover IPv4-preferred TCP dialing against a real localhost IPv4 listener.
+- [x] Cover IPv6-preferred TCP dialing when IPv6 localhost is available.
+- [x] Reuse existing localhost family detection to keep the test portable.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestDialTCPWithStrategy(LiteralIP|LocalhostFamilies|PreferredFamilies)|TestResolveUDPWithStrategyLocalhostFamilies' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 69.1% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- TCP dial strategy coverage now includes preferred-family modes in addition to literal and single-family modes.
+- The preferred-family tests use real loopback TCP listeners and skip only unavailable local address families.
+
 Commit frequency and quality assessment:
 
 - [x] Collect commit cadence, author, and churn metrics from Git history.
