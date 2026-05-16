@@ -2356,3 +2356,22 @@ Review:
 
 - UDP association loop now has real loopback UDP and smux coverage for parsed SOCKS5 UDP packets.
 - The test verifies target parsing, UDP stream opening, and payload chunk forwarding into the smux stream.
+
+Post Phase 8 protocol payload helper refactor:
+
+- [x] Introduce shared protocol payload length/read/write helpers.
+- [x] Refactor protocol hello, TCP status, smux header, chunk, and UDP reply code without changing wire bytes.
+- [x] Run focused protocol/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test ./... -run 'Test(ProtocolHello|TCPOpenStatus|SmuxOpenHeader|Chunk|UDPReply|ProtocolWritersRejectShortWritesWithoutError)' -count=1`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 72.9% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Protocol payload length checks now use a shared `maxProtocolFieldLen` constant instead of repeated `65535` literals.
+- Optional payload write/read logic is centralized while existing wire golden tests keep the frame bytes unchanged.

@@ -47,6 +47,8 @@ const (
 
 const protocolHelloMagic = "XTUN"
 
+const maxProtocolFieldLen = 65535
+
 type ProtocolHello struct {
 	Version      byte
 	Status       byte
@@ -71,7 +73,7 @@ func currentProtocolHello() ProtocolHello {
 }
 
 func writeProtocolHello(w io.Writer, hello ProtocolHello) error {
-	if len(hello.Message) > 65535 {
+	if err := validateProtocolFieldLen("协议消息", len(hello.Message)); err != nil {
 		return fmt.Errorf("协议消息过长")
 	}
 	head := make([]byte, 12)
@@ -83,10 +85,7 @@ func writeProtocolHello(w io.Writer, hello ProtocolHello) error {
 	if err := writeAll(w, head); err != nil {
 		return err
 	}
-	if hello.Message == "" {
-		return nil
-	}
-	return writeAll(w, []byte(hello.Message))
+	return writeOptionalPayload(w, []byte(hello.Message))
 }
 
 func readProtocolHello(r io.Reader) (ProtocolHello, error) {
@@ -98,11 +97,9 @@ func readProtocolHello(r io.Reader) (ProtocolHello, error) {
 		return ProtocolHello{}, fmt.Errorf("协议魔数无效")
 	}
 	msgLen := int(binary.BigEndian.Uint16(head[6:8]))
-	message := make([]byte, msgLen)
-	if msgLen > 0 {
-		if _, err := io.ReadFull(r, message); err != nil {
-			return ProtocolHello{}, err
-		}
+	message, err := readExactPayload(r, msgLen)
+	if err != nil {
+		return ProtocolHello{}, err
 	}
 	return ProtocolHello{
 		Version:      head[4],
@@ -137,7 +134,7 @@ func negotiateProtocolHello(clientHello ProtocolHello) ProtocolHello {
 }
 
 func writeTCPOpenStatus(w io.Writer, status byte, message string) error {
-	if len(message) > 65535 {
+	if err := validateProtocolFieldLen("TCP 打开状态消息", len(message)); err != nil {
 		return fmt.Errorf("TCP 打开状态消息过长")
 	}
 	head := make([]byte, 3)
@@ -146,10 +143,7 @@ func writeTCPOpenStatus(w io.Writer, status byte, message string) error {
 	if err := writeAll(w, head); err != nil {
 		return err
 	}
-	if message == "" {
-		return nil
-	}
-	return writeAll(w, []byte(message))
+	return writeOptionalPayload(w, []byte(message))
 }
 
 func readTCPOpenStatus(r io.Reader) (byte, string, error) {
@@ -158,11 +152,9 @@ func readTCPOpenStatus(r io.Reader) (byte, string, error) {
 		return 0, "", err
 	}
 	msgLen := int(binary.BigEndian.Uint16(head[1:3]))
-	message := make([]byte, msgLen)
-	if msgLen > 0 {
-		if _, err := io.ReadFull(r, message); err != nil {
-			return 0, "", err
-		}
+	message, err := readExactPayload(r, msgLen)
+	if err != nil {
+		return 0, "", err
 	}
 	return head[0], string(message), nil
 }
@@ -175,17 +167,15 @@ func readSmuxOpenHeader(r io.Reader) (byte, byte, string, error) {
 	kind := head[0]
 	strategy := head[1]
 	targetLen := int(binary.BigEndian.Uint16(head[2:4]))
-	targetRaw := make([]byte, targetLen)
-	if targetLen > 0 {
-		if _, err := io.ReadFull(r, targetRaw); err != nil {
-			return 0, 0, "", err
-		}
+	targetRaw, err := readExactPayload(r, targetLen)
+	if err != nil {
+		return 0, 0, "", err
 	}
 	return kind, strategy, string(targetRaw), nil
 }
 
 func writeSmuxOpenHeader(w io.Writer, kind byte, strategy byte, target string) error {
-	if len(target) > 65535 {
+	if err := validateProtocolFieldLen("目标地址", len(target)); err != nil {
 		return fmt.Errorf("目标地址过长")
 	}
 	head := make([]byte, 4)
@@ -195,14 +185,11 @@ func writeSmuxOpenHeader(w io.Writer, kind byte, strategy byte, target string) e
 	if err := writeAll(w, head); err != nil {
 		return err
 	}
-	if len(target) == 0 {
-		return nil
-	}
-	return writeAll(w, []byte(target))
+	return writeOptionalPayload(w, []byte(target))
 }
 
 func writeChunk(w io.Writer, b []byte) error {
-	if len(b) > 65535 {
+	if err := validateProtocolFieldLen("数据块", len(b)); err != nil {
 		return fmt.Errorf("数据块过大")
 	}
 	h := make([]byte, 2)
@@ -210,10 +197,7 @@ func writeChunk(w io.Writer, b []byte) error {
 	if err := writeAll(w, h); err != nil {
 		return err
 	}
-	if len(b) == 0 {
-		return nil
-	}
-	return writeAll(w, b)
+	return writeOptionalPayload(w, b)
 }
 
 func readChunk(r io.Reader) ([]byte, error) {
@@ -222,22 +206,17 @@ func readChunk(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	n := int(binary.BigEndian.Uint16(h))
-	if n == 0 {
-		return nil, nil
-	}
-	b := make([]byte, n)
-	_, err := io.ReadFull(r, b)
-	return b, err
+	return readExactPayload(r, n)
 }
 
 func writeUDPReply(w io.Writer, addr string, payload []byte) error {
-	if len(addr) > 65535 {
+	if err := validateProtocolFieldLen("地址", len(addr)); err != nil {
 		return fmt.Errorf("地址过长")
 	}
 	if err := validateHostPort(addr); err != nil {
 		return fmt.Errorf("UDP 响应地址无效: %w", err)
 	}
-	if len(payload) > 65535 {
+	if err := validateProtocolFieldLen("数据块", len(payload)); err != nil {
 		return fmt.Errorf("数据块过大")
 	}
 	head := make([]byte, 4)
@@ -246,22 +225,38 @@ func writeUDPReply(w io.Writer, addr string, payload []byte) error {
 	if err := writeAll(w, head); err != nil {
 		return err
 	}
-	if len(addr) > 0 {
-		if err := writeAll(w, []byte(addr)); err != nil {
-			return err
-		}
+	if err := writeOptionalPayload(w, []byte(addr)); err != nil {
+		return err
 	}
-	if len(payload) > 0 {
-		if err := writeAll(w, payload); err != nil {
-			return err
-		}
+	return writeOptionalPayload(w, payload)
+}
+
+func validateProtocolFieldLen(name string, length int) error {
+	if length > maxProtocolFieldLen {
+		return fmt.Errorf("%s长度超过 %d 字节", name, maxProtocolFieldLen)
 	}
 	return nil
+}
+
+func writeOptionalPayload(w io.Writer, payload []byte) error {
+	if len(payload) == 0 {
+		return nil
+	}
+	return writeAll(w, payload)
 }
 
 func writeAll(w io.Writer, b []byte) error {
 	_, err := writeAllCount(w, b)
 	return err
+}
+
+func readExactPayload(r io.Reader, length int) ([]byte, error) {
+	if length == 0 {
+		return nil, nil
+	}
+	payload := make([]byte, length)
+	_, err := io.ReadFull(r, payload)
+	return payload, err
 }
 
 func writeAllCount(w io.Writer, b []byte) (int, error) {
@@ -292,21 +287,17 @@ func readUDPReply(r io.Reader) (string, []byte, error) {
 	}
 	addrLen := int(binary.BigEndian.Uint16(head[0:2]))
 	dataLen := int(binary.BigEndian.Uint16(head[2:4]))
-	addrRaw := make([]byte, addrLen)
-	if addrLen > 0 {
-		if _, err := io.ReadFull(r, addrRaw); err != nil {
-			return "", nil, err
-		}
+	addrRaw, err := readExactPayload(r, addrLen)
+	if err != nil {
+		return "", nil, err
 	}
 	addr := string(addrRaw)
 	if err := validateHostPort(addr); err != nil {
 		return "", nil, fmt.Errorf("UDP 响应地址无效: %w", err)
 	}
-	data := make([]byte, dataLen)
-	if dataLen > 0 {
-		if _, err := io.ReadFull(r, data); err != nil {
-			return "", nil, err
-		}
+	data, err := readExactPayload(r, dataLen)
+	if err != nil {
+		return "", nil, err
 	}
 	return addr, data, nil
 }
