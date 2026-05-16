@@ -2923,3 +2923,22 @@ Review:
 
 - UDP response writeback now has loopback coverage with real UDP sockets.
 - The test verifies the upstream reply address and payload survive SOCKS5 UDP packet encoding back to the original client.
+
+Post Phase 8 max-streams UDP status:
+
+- [x] Return a UDP open-status error when a UDP stream is rejected by `max-streams` and UDPStatus is negotiated.
+- [x] Cover the rejection path over a real WebSocket + smux channel.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestHandleWebSocketChannelReturns.*StatusWhenStreamLimitReached' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- `max-streams` rejection now returns explicit UDP open-status errors when the peer negotiated UDPStatus.
+- The WebSocket + smux test confirms TCPStatus remains intact and UDPStatus receives the same resource-limit reason instead of an opaque stream close.

@@ -2918,6 +2918,10 @@ func rejectSmuxStreamDueToLimit(ch *WSChannel, stream *smux.Stream) {
 	}
 	if kind == streamKindTCP && atomic.LoadUint32(&ch.capabilities)&protocolCapabilityTCPStatus != 0 {
 		_ = writeTCPOpenStatus(stream, tcpOpenStatusError, "max streams reached")
+		return
+	}
+	if kind == streamKindUDP && atomic.LoadUint32(&ch.capabilities)&protocolCapabilityUDPStatus != 0 {
+		_ = writeUDPOpenStatus(stream, udpOpenStatusError, "max streams reached")
 	}
 }
 
