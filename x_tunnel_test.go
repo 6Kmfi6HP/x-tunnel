@@ -718,6 +718,50 @@ func TestQueryHTTPSRecordDispatchesTransports(t *testing.T) {
 	}
 }
 
+func TestRefreshECHFallbackAndUDPRefresh(t *testing.T) {
+	oldCfg := cfg
+	oldDNS, oldDomain := dnsServer, echDomain
+	oldFallback := fallback
+	echListMu.RLock()
+	oldECHList := append([]byte(nil), echList...)
+	echListMu.RUnlock()
+	t.Cleanup(func() {
+		cfg = oldCfg
+		dnsServer, echDomain = oldDNS, oldDomain
+		fallback = oldFallback
+		setTestECHList(oldECHList)
+	})
+	cfg.DNSQueryTimeout = time.Second
+	cfg.ECHRetryDelay = time.Millisecond
+
+	setTestECHList([]byte("existing-ech"))
+	fallback = true
+	dnsServer = "127.0.0.1:1"
+	echDomain = "example.com"
+	if err := refreshECH(); err != nil {
+		t.Fatalf("refreshECH fallback returned error: %v", err)
+	}
+	echListMu.RLock()
+	gotFallback := append([]byte(nil), echList...)
+	echListMu.RUnlock()
+	if !bytes.Equal(gotFallback, []byte("existing-ech")) {
+		t.Fatalf("fallback refresh changed ECH list to %q", gotFallback)
+	}
+
+	fallback = false
+	dnsServer = startDNSUDPResponder(t, []byte("refreshed-ech"))
+	setTestECHList(nil)
+	if err := refreshECH(); err != nil {
+		t.Fatalf("refreshECH UDP returned error: %v", err)
+	}
+	echListMu.RLock()
+	gotRefreshed := append([]byte(nil), echList...)
+	echListMu.RUnlock()
+	if !bytes.Equal(gotRefreshed, []byte("refreshed-ech")) {
+		t.Fatalf("refreshed ECH list = %q, want refreshed-ech", gotRefreshed)
+	}
+}
+
 func startDNSUDPResponder(t *testing.T, ech []byte) string {
 	t.Helper()
 	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
@@ -3411,6 +3455,79 @@ func TestHandleSOCKS5ConnectProxiesOverSmux(t *testing.T) {
 	case <-handlerDone:
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for SOCKS5 CONNECT handler shutdown")
+	}
+}
+
+func TestHandleSOCKS5ConnectReturnsFailureOnTCPStatusError(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	})
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyDefault
+
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{protocolCapabilityTCPStatus},
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindTCP || strategy != IPStrategyDefault || target != "blocked.example:443" {
+			serverDone <- fmt.Errorf("SOCKS5 CONNECT error header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		serverDone <- writeTCPOpenStatus(stream, tcpOpenStatusError, "blocked by policy")
+	}()
+
+	proxyServer, proxyClient := net.Pipe()
+	_ = proxyServer.SetDeadline(time.Now().Add(time.Second))
+	_ = proxyClient.SetDeadline(time.Now().Add(time.Second))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		handleSOCKS5Connect(proxyServer, "blocked.example:443")
+	}()
+
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(proxyClient, reply); err != nil {
+		t.Fatalf("read SOCKS5 CONNECT failure reply: %v", err)
+	}
+	if reply[0] != 0x05 || reply[1] != 0x05 {
+		t.Fatalf("SOCKS5 CONNECT failure reply = %v, want general failure", reply)
+	}
+
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server SOCKS5 CONNECT error handler: %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for failed SOCKS5 CONNECT handler shutdown")
+	}
+	if _, err := proxyClient.Write([]byte("must-not-proxy")); err == nil {
+		t.Fatal("SOCKS5 CONNECT failure left client connection writable")
 	}
 }
 

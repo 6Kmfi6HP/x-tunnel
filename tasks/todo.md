@@ -2415,3 +2415,29 @@ Review:
 
 - SOCKS5 UDP request and response parsing now share the same RFC 1928 RSV/FRAG/ATYP host:port parser.
 - Relay response and local UDP packet builders now share the same address header construction helper while preserving existing wrappers.
+
+Post Phase 8 ECH refresh coverage:
+
+- [ ] Cover `refreshECH` fallback skip behavior without DNS lookup.
+- [ ] Cover `refreshECH` loading ECH config through `prepareECH` and a loopback UDP DNS responder.
+- [ ] Verify the global ECH list is preserved or updated as expected.
+- [ ] Run focused/full/coverage/race verification and commit.
+
+Post Phase 8 SOCKS5 CONNECT TCPStatus error mapping:
+
+- [x] Cover `handleSOCKS5Connect` when `openTCPStream` returns a negotiated TCPStatus error.
+- [x] Verify the local SOCKS5 reply is a failure response and no payload proxying starts.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSOCKS5Connect(ProxiesOverSmux|ReturnsFailureOnTCPStatusError)|TestECHPoolOpenTCPStreamStatusError' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 73.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- SOCKS5 CONNECT now has short real-smux coverage for both remote TCPStatus success and remote TCPStatus error paths.
+- A remote TCP open failure maps to SOCKS5 general failure and closes the client connection before any payload proxying can start.
