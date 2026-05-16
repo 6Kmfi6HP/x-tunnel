@@ -2866,3 +2866,22 @@ Review:
 
 - WebSocket metadata parsing already rejects present-but-empty `client_id` and `channel_id` values while preserving generated defaults when the parameters are absent.
 - The focused tests cover generated metadata, valid explicit metadata, empty values, malformed values, and WSS/WS dial metadata emission.
+
+Post Phase 8 WebSocket dial IP override coverage:
+
+- [x] Cover `dialWebSocketWithECH` dialing a URL host through an explicit IP override.
+- [x] Prove the override preserves the URL port while replacing the dial host.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestDialWebSocketWithECH' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.5% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- WebSocket dialing now has loopback coverage for URL-host override via an explicit IP target.
+- The test verifies the override replaces only the dial host while preserving the original WebSocket URL port.
