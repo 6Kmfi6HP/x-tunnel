@@ -84,7 +84,7 @@ Checks:
 - Review server `-max-streams`; `0` means unlimited.
 - Raise the limit if expected concurrency is higher than the configured cap.
 - Check whether many clients, WebSocket channels, or long-lived TCP/UDP streams are stuck open.
-- If `-metrics` is enabled, check `x_tunnel_server_client_session_rejections_total` and `x_tunnel_server_stream_rejections_total`.
+- If `-metrics` is enabled, check `x_tunnel_server_client_session_rejections_total`, `x_tunnel_server_stream_rejections_total`, `x_tunnel_server_channels`, `x_tunnel_server_active_streams`, and `x_tunnel_udp_associations_active`.
 
 ## Unsupported Stream Kind
 

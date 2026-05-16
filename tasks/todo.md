@@ -1214,3 +1214,19 @@ Verification:
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 51.0% of statements`.
 - `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 active runtime metrics:
+
+- [x] Expose active server channels as a gauge.
+- [x] Expose active server streams as a gauge, including unlimited `max-streams=0` mode.
+- [x] Expose active SOCKS5 UDP associations as a gauge.
+- [x] Document active runtime gauges in README and troubleshooting guidance.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(WriteMetrics|ClientSessionStreamLimitAccounting|LocalTunnelIntegration|IntegrationMaxClientsRejectsNewClient|IntegrationTCPStatusRejectsBlockedTarget)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 51.0% of statements`.
+- `go test -race -count=1 ./...`: pass.

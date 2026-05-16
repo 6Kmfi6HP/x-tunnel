@@ -156,6 +156,7 @@ func TestVersionString(t *testing.T) {
 func TestWriteMetrics(t *testing.T) {
 	oldStreams := atomic.LoadUint64(&serverStreamSeq)
 	oldUDP := atomic.LoadUint64(&udpAssociationSeq)
+	oldUDPActive := atomic.LoadUint64(&udpAssociationActiveSeq)
 	oldReconnects := atomic.LoadUint64(&clientReconnectSeq)
 	oldSourceRejects := atomic.LoadUint64(&serverSourceRejectSeq)
 	oldAuthRejects := atomic.LoadUint64(&serverAuthRejectSeq)
@@ -172,6 +173,7 @@ func TestWriteMetrics(t *testing.T) {
 	defer func() {
 		atomic.StoreUint64(&serverStreamSeq, oldStreams)
 		atomic.StoreUint64(&udpAssociationSeq, oldUDP)
+		atomic.StoreUint64(&udpAssociationActiveSeq, oldUDPActive)
 		atomic.StoreUint64(&clientReconnectSeq, oldReconnects)
 		atomic.StoreUint64(&serverSourceRejectSeq, oldSourceRejects)
 		atomic.StoreUint64(&serverAuthRejectSeq, oldAuthRejects)
@@ -189,6 +191,7 @@ func TestWriteMetrics(t *testing.T) {
 	}()
 	atomic.StoreUint64(&serverStreamSeq, 7)
 	atomic.StoreUint64(&udpAssociationSeq, 3)
+	atomic.StoreUint64(&udpAssociationActiveSeq, 2)
 	atomic.StoreUint64(&clientReconnectSeq, 2)
 	atomic.StoreUint64(&serverSourceRejectSeq, 11)
 	atomic.StoreUint64(&serverAuthRejectSeq, 13)
@@ -202,7 +205,11 @@ func TestWriteMetrics(t *testing.T) {
 	atomic.StoreUint64(&clientProtocolOKSeq, 43)
 	atomic.StoreUint64(&clientProtocolLegacySeq, 47)
 	atomic.StoreUint64(&clientProtocolFailureSeq, 53)
-	serverSessions.Store("metrics-test", &ClientSession{clientID: "metrics-test"})
+	serverSessions.Store("metrics-test", &ClientSession{
+		clientID:      "metrics-test",
+		channels:      map[uint64]*WSChannel{1: &WSChannel{id: 1}, 2: &WSChannel{id: 2}},
+		activeStreams: 5,
+	})
 
 	var buf bytes.Buffer
 	writeMetrics(&buf)
@@ -210,6 +217,7 @@ func TestWriteMetrics(t *testing.T) {
 	for _, want := range []string{
 		"x_tunnel_server_streams_total 7",
 		"x_tunnel_udp_associations_total 3",
+		"x_tunnel_udp_associations_active 2",
 		"x_tunnel_client_reconnects_total 2",
 		"x_tunnel_server_source_rejections_total 11",
 		"x_tunnel_server_auth_rejections_total 13",
@@ -223,7 +231,9 @@ func TestWriteMetrics(t *testing.T) {
 		"x_tunnel_client_protocol_negotiations_total 43",
 		"x_tunnel_client_protocol_legacy_sessions_total 47",
 		"x_tunnel_client_protocol_negotiation_failures_total 53",
-		"x_tunnel_server_sessions",
+		"x_tunnel_server_sessions 1",
+		"x_tunnel_server_channels 2",
+		"x_tunnel_server_active_streams 5",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metrics output missing %q:\n%s", want, got)
@@ -567,6 +577,17 @@ func TestClientSessionStreamLimitAccounting(t *testing.T) {
 	}
 
 	maxStreamsPerClient = 0
+	unlimited := &ClientSession{}
+	if active, ok := unlimited.tryAcquireStream(); !ok || active != 1 {
+		t.Fatalf("unlimited acquire = active %d ok %v, want active 1 ok true", active, ok)
+	}
+	if got := unlimited.activeStreamCount(); got != 1 {
+		t.Fatalf("unlimited activeStreamCount = %d, want 1", got)
+	}
+	unlimited.releaseStream()
+	if got := unlimited.activeStreamCount(); got != 0 {
+		t.Fatalf("unlimited activeStreamCount after release = %d, want 0", got)
+	}
 	if _, ok := session.tryAcquireStream(); !ok {
 		t.Fatal("unlimited maxStreamsPerClient rejected a stream")
 	}

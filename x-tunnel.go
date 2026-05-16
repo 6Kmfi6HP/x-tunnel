@@ -172,6 +172,7 @@ var (
 
 	serverStreamSeq            uint64
 	udpAssociationSeq          uint64
+	udpAssociationActiveSeq    uint64
 	clientReconnectSeq         uint64
 	serverSourceRejectSeq      uint64
 	serverAuthRejectSeq        uint64
@@ -2312,12 +2313,9 @@ func (s *ClientSession) removeChannel(id uint64, current *WSChannel) {
 }
 
 func (s *ClientSession) tryAcquireStream() (int, bool) {
-	if maxStreamsPerClient <= 0 {
-		return 0, true
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.activeStreams >= maxStreamsPerClient {
+	if maxStreamsPerClient > 0 && s.activeStreams >= maxStreamsPerClient {
 		return s.activeStreams, false
 	}
 	s.activeStreams++
@@ -2325,9 +2323,6 @@ func (s *ClientSession) tryAcquireStream() (int, bool) {
 }
 
 func (s *ClientSession) releaseStream() {
-	if maxStreamsPerClient <= 0 {
-		return
-	}
 	s.mu.Lock()
 	if s.activeStreams > 0 {
 		s.activeStreams--
@@ -2508,6 +2503,8 @@ func writeMetrics(w io.Writer) {
 	fmt.Fprintf(w, "x_tunnel_server_streams_total %d\n", atomic.LoadUint64(&serverStreamSeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_udp_associations_total counter\n")
 	fmt.Fprintf(w, "x_tunnel_udp_associations_total %d\n", atomic.LoadUint64(&udpAssociationSeq))
+	fmt.Fprintf(w, "# TYPE x_tunnel_udp_associations_active gauge\n")
+	fmt.Fprintf(w, "x_tunnel_udp_associations_active %d\n", atomic.LoadUint64(&udpAssociationActiveSeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_client_reconnects_total counter\n")
 	fmt.Fprintf(w, "x_tunnel_client_reconnects_total %d\n", atomic.LoadUint64(&clientReconnectSeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_server_source_rejections_total counter\n")
@@ -2536,12 +2533,44 @@ func writeMetrics(w io.Writer) {
 	fmt.Fprintf(w, "x_tunnel_client_protocol_negotiation_failures_total %d\n", atomic.LoadUint64(&clientProtocolFailureSeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_server_sessions gauge\n")
 	fmt.Fprintf(w, "x_tunnel_server_sessions %d\n", countServerSessions())
+	fmt.Fprintf(w, "# TYPE x_tunnel_server_channels gauge\n")
+	fmt.Fprintf(w, "x_tunnel_server_channels %d\n", countServerChannels())
+	fmt.Fprintf(w, "# TYPE x_tunnel_server_active_streams gauge\n")
+	fmt.Fprintf(w, "x_tunnel_server_active_streams %d\n", countServerActiveStreams())
 }
 
 func countServerSessions() int {
 	count := 0
 	serverSessions.Range(func(_, _ any) bool {
 		count++
+		return true
+	})
+	return count
+}
+
+func countServerChannels() int {
+	count := 0
+	serverSessions.Range(func(_, value any) bool {
+		session, ok := value.(*ClientSession)
+		if !ok || session == nil {
+			return true
+		}
+		session.mu.RLock()
+		count += len(session.channels)
+		session.mu.RUnlock()
+		return true
+	})
+	return count
+}
+
+func countServerActiveStreams() int {
+	count := 0
+	serverSessions.Range(func(_, value any) bool {
+		session, ok := value.(*ClientSession)
+		if !ok || session == nil {
+			return true
+		}
+		count += session.activeStreamCount()
 		return true
 	})
 	return count
@@ -3424,6 +3453,7 @@ type UDPAssociation struct {
 	mu        sync.Mutex
 	closed    bool
 	receiving bool
+	active    bool
 	channelID int
 	target    string
 	stream    *smux.Stream
@@ -3663,8 +3693,10 @@ func handleSOCKS5UDP(c net.Conn, cfgp *ProxyConfig) {
 		tcpConn:     c,
 		udpListener: ul,
 		pool:        echPool,
+		active:      true,
 		channelID:   -1,
 	}
+	atomic.AddUint64(&udpAssociationActiveSeq, 1)
 	log.Printf("[客户端] udp_assoc=%d SOCKS5-UDP 关联打开 listener=%s client=%s", assoc.id, actual.String(), clientSourceAddr(c))
 
 	go assoc.loop()
@@ -3803,7 +3835,12 @@ func (a *UDPAssociation) Close() {
 	chID := a.channelID
 	a.closed = true
 	a.stream = nil
+	active := a.active
+	a.active = false
 	a.mu.Unlock()
+	if active {
+		atomic.AddUint64(&udpAssociationActiveSeq, ^uint64(0))
+	}
 	if stream != nil {
 		_ = stream.Close()
 	}
