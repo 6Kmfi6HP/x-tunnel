@@ -3466,6 +3466,10 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	if _, err := io.ReadFull(c, head); err != nil {
 		return
 	}
+	if head[2] != 0x00 {
+		_, _ = c.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		return
+	}
 	var target string
 	switch head[3] {
 	case 0x01:
@@ -3540,6 +3544,10 @@ func handleSOCKS5UserPassAuth(c net.Conn, cfgp *ProxyConfig) error {
 	b := make([]byte, 2)
 	if _, err := io.ReadFull(c, b); err != nil {
 		return err
+	}
+	if b[0] != 0x01 {
+		_, _ = c.Write([]byte{0x01, 0x01})
+		return fmt.Errorf("SOCKS5 用户名密码认证版本无效: %d", b[0])
 	}
 	u := make([]byte, b[1])
 	if _, err := io.ReadFull(c, u); err != nil {

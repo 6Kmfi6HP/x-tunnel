@@ -1027,3 +1027,18 @@ Verification:
 - `go test -run 'Test(HTTPProxyTarget|HandleHTTPRejectsUnsupportedAbsoluteFormScheme|HandleSmuxStreamRejectsMalformedTCPTargetWithStatus|IntegrationTCPStatusRejectsBlockedTarget)' -count=1 ./...`: pass.
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 46.6% of statements`.
+
+Post Phase 8 local SOCKS5 request header validation:
+
+- [x] Reject local SOCKS5 requests whose request header RSV byte is non-zero.
+- [x] Reject username/password auth sub-negotiation when the auth version is not `0x01`.
+- [x] Add focused tests for malformed RSV and auth version.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSOCKS5(UserPassAuthRejectsInvalidVersion|UserPassAuthRejectsShortRequest|RejectsNonzeroRequestReservedByte|RejectsZeroConnectPort|RejectsUnsupportedCommand|RejectsUnsupportedAddressType)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 46.7% of statements`.
+- `go test -race -count=1 ./...`: pass.

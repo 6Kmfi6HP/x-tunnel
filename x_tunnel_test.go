@@ -1493,6 +1493,33 @@ func TestHandleSOCKS5UserPassAuthRejectsShortRequest(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5UserPassAuthRejectsInvalidVersion(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleSOCKS5UserPassAuth(server, &ProxyConfig{Username: "user", Password: "pass"})
+	}()
+
+	if _, err := client.Write([]byte{0x02, 0x04}); err != nil {
+		t.Fatalf("write invalid auth version: %v", err)
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read auth response: %v", err)
+	}
+	if !bytes.Equal(resp, []byte{0x01, 0x01}) {
+		t.Fatalf("SOCKS5 auth response = %v, want [1 1]", resp)
+	}
+	if err := <-errCh; err == nil {
+		t.Fatal("handleSOCKS5UserPassAuth accepted invalid auth version")
+	}
+}
+
 func TestHandleSOCKS5RejectsZeroConnectPort(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -1520,6 +1547,36 @@ func TestHandleSOCKS5RejectsZeroConnectPort(t *testing.T) {
 	}
 	if resp[1] == 0x00 {
 		t.Fatalf("SOCKS5 zero-port connect succeeded: %v", resp)
+	}
+}
+
+func TestHandleSOCKS5RejectsNonzeroRequestReservedByte(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	go handleSOCKS5(server, &ProxyConfig{})
+	if _, err := client.Write([]byte{0x05, 0x01, 0x00}); err != nil {
+		t.Fatalf("write SOCKS5 greeting: %v", err)
+	}
+	method := make([]byte, 2)
+	if _, err := io.ReadFull(client, method); err != nil {
+		t.Fatalf("read SOCKS5 method: %v", err)
+	}
+	if !bytes.Equal(method, []byte{0x05, 0x00}) {
+		t.Fatalf("SOCKS5 method = %v, want [5 0]", method)
+	}
+	if _, err := client.Write([]byte{0x05, 0x01, 0x01, 0x01}); err != nil {
+		t.Fatalf("write SOCKS5 request with nonzero RSV: %v", err)
+	}
+	resp := make([]byte, 10)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read SOCKS5 response: %v", err)
+	}
+	if resp[1] == 0x00 {
+		t.Fatalf("SOCKS5 nonzero RSV request succeeded: %v", resp)
 	}
 }
 
