@@ -2054,6 +2054,26 @@ Review:
 - Server TCP smux handling now has a success-path regression proving TCPStatus OK is emitted before proxied bytes.
 - The test uses a real loopback TCP echo target and verifies payload exchange through the smux stream.
 
+Post Phase 8 server UDP smux success path:
+
+- [x] Cover `handleSmuxStream` opening a UDP target with direct relay mode.
+- [x] Verify a smux chunk is sent as a real UDP datagram to a loopback echo target.
+- [x] Verify the server returns a validated UDP reply frame with the source address and payload.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSmuxStream(UDPProxiesDatagram|RejectsInvalidUDPIPStrategy)|TestUDPReplyRoundTrip' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 68.2% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Server UDP smux handling now has a success-path regression using a real loopback UDP echo target.
+- The test verifies both directions of the internal UDP stream protocol: chunk-to-datagram forwarding and validated UDP reply framing.
+
 Commit frequency and quality assessment:
 
 - [x] Collect commit cadence, author, and churn metrics from Git history.
