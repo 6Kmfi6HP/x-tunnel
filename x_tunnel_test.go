@@ -200,6 +200,7 @@ func TestWriteMetrics(t *testing.T) {
 	oldClientProtocolOK := atomic.LoadUint64(&clientProtocolOKSeq)
 	oldClientProtocolLegacy := atomic.LoadUint64(&clientProtocolLegacySeq)
 	oldClientProtocolFailures := atomic.LoadUint64(&clientProtocolFailureSeq)
+	oldRTTProbeFailures := atomic.LoadUint64(&clientRTTProbeFailureSeq)
 	oldPool := echPool
 	defer func() {
 		atomic.StoreUint64(&serverStreamSeq, oldStreams)
@@ -218,6 +219,7 @@ func TestWriteMetrics(t *testing.T) {
 		atomic.StoreUint64(&clientProtocolOKSeq, oldClientProtocolOK)
 		atomic.StoreUint64(&clientProtocolLegacySeq, oldClientProtocolLegacy)
 		atomic.StoreUint64(&clientProtocolFailureSeq, oldClientProtocolFailures)
+		atomic.StoreUint64(&clientRTTProbeFailureSeq, oldRTTProbeFailures)
 		echPool = oldPool
 		serverSessions.Delete("metrics-test")
 	}()
@@ -237,6 +239,7 @@ func TestWriteMetrics(t *testing.T) {
 	atomic.StoreUint64(&clientProtocolOKSeq, 43)
 	atomic.StoreUint64(&clientProtocolLegacySeq, 47)
 	atomic.StoreUint64(&clientProtocolFailureSeq, 53)
+	atomic.StoreUint64(&clientRTTProbeFailureSeq, 59)
 	serverSessions.Store("metrics-test", &ClientSession{
 		clientID:      "metrics-test",
 		channels:      map[uint64]*WSChannel{1: &WSChannel{id: 1}, 2: &WSChannel{id: 2}},
@@ -268,6 +271,7 @@ func TestWriteMetrics(t *testing.T) {
 		"x_tunnel_client_protocol_negotiations_total 43",
 		"x_tunnel_client_protocol_legacy_sessions_total 47",
 		"x_tunnel_client_protocol_negotiation_failures_total 53",
+		"x_tunnel_client_rtt_probe_failures_total 59",
 		"x_tunnel_server_sessions 1",
 		"x_tunnel_server_channels 2",
 		"x_tunnel_server_active_streams 5",
@@ -6483,8 +6487,13 @@ func TestECHPoolProbeChannelRTTOnceUsesPingStream(t *testing.T) {
 
 func TestECHPoolProbeChannelRTTUpdatesAndExits(t *testing.T) {
 	oldCfg := cfg
-	t.Cleanup(func() { cfg = oldCfg })
+	oldFailures := atomic.LoadUint64(&clientRTTProbeFailureSeq)
+	t.Cleanup(func() {
+		cfg = oldCfg
+		atomic.StoreUint64(&clientRTTProbeFailureSeq, oldFailures)
+	})
 	cfg.RTTProbeTimeout = 20 * time.Millisecond
+	atomic.StoreUint64(&clientRTTProbeFailureSeq, 0)
 
 	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
 	session := &ClientSession{clientID: "probe-rtt-loop-test", channels: make(map[uint64]*WSChannel)}
@@ -6522,6 +6531,9 @@ func TestECHPoolProbeChannelRTTUpdatesAndExits(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("probeChannelRTT did not exit after session close")
+	}
+	if got := atomic.LoadUint64(&clientRTTProbeFailureSeq); got == 0 {
+		t.Fatal("clientRTTProbeFailureSeq = 0, want at least one failed probe")
 	}
 	_ = serverSession.Close()
 	select {

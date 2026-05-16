@@ -3022,3 +3022,23 @@ Review:
 - Structured remote open failures now survive as typed errors on the client path.
 - SOCKS5 CONNECT maps `policy_denied` to reply `0x02` while legacy/unstructured remote failures continue to return `0x05`.
 - Protocol and proxy research docs now describe the conservative mapping.
+
+Post Phase 9 RTT probe failure metric:
+
+- [x] Count client RTT probe failures.
+- [x] Export the failure counter in `/metrics`.
+- [x] Cover the metric output and probe-loop increment path.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestWriteMetrics|TestECHPoolProbeChannelRTT' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 77.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Client RTT probe failures are now counted on both startup probe and ongoing probe-loop failures.
+- `/metrics` exports `x_tunnel_client_rtt_probe_failures_total`, and tests cover both output and increment behavior.

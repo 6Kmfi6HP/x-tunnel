@@ -187,6 +187,7 @@ var (
 	clientProtocolOKSeq        uint64
 	clientProtocolLegacySeq    uint64
 	clientProtocolFailureSeq   uint64
+	clientRTTProbeFailureSeq   uint64
 )
 
 var (
@@ -2687,6 +2688,8 @@ func writeMetrics(w io.Writer) {
 	fmt.Fprintf(w, "x_tunnel_client_protocol_legacy_sessions_total %d\n", atomic.LoadUint64(&clientProtocolLegacySeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_client_protocol_negotiation_failures_total counter\n")
 	fmt.Fprintf(w, "x_tunnel_client_protocol_negotiation_failures_total %d\n", atomic.LoadUint64(&clientProtocolFailureSeq))
+	fmt.Fprintf(w, "# TYPE x_tunnel_client_rtt_probe_failures_total counter\n")
+	fmt.Fprintf(w, "x_tunnel_client_rtt_probe_failures_total %d\n", atomic.LoadUint64(&clientRTTProbeFailureSeq))
 	fmt.Fprintf(w, "# TYPE x_tunnel_server_sessions gauge\n")
 	fmt.Fprintf(w, "x_tunnel_server_sessions %d\n", countServerSessions())
 	fmt.Fprintf(w, "# TYPE x_tunnel_server_channels gauge\n")
@@ -3341,6 +3344,8 @@ func (p *ECHPool) dialAndServe(ctx context.Context, idx int, ip string) {
 		reconnectAttempt = 0
 		if rtt, err := p.probeChannelRTTOnce(sess, cfg.RTTProbeTimeout); err == nil {
 			atomic.StoreInt64(&p.channelRTT[idx], rtt)
+		} else {
+			atomic.AddUint64(&clientRTTProbeFailureSeq, 1)
 		}
 
 		done := make(chan error, 1)
@@ -3392,6 +3397,7 @@ func (p *ECHPool) probeChannelRTT(sess *smux.Session, idx int, done chan error) 
 	for {
 		rtt, err := p.probeChannelRTTOnce(sess, cfg.RTTProbeTimeout)
 		if err != nil {
+			atomic.AddUint64(&clientRTTProbeFailureSeq, 1)
 			atomic.StoreInt64(&p.channelRTT[idx], int64(cfg.RTTProbeTimeout.Nanoseconds()))
 			if sess.IsClosed() {
 				exitErr = err
