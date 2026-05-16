@@ -2904,3 +2904,22 @@ Review:
 
 - WebSocket dialing now covers both IP-only override and host:port override branches.
 - The host:port test proves the override can connect to the backend even when the WebSocket URL carries a different port.
+
+Post Phase 8 UDP response writeback coverage:
+
+- [x] Cover `UDPAssociation.handleUDPResponse` successful writeback to the original UDP client.
+- [x] Prove the reply is encoded as a SOCKS5 UDP packet with the upstream target address and payload intact.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestUDPAssociationHandleUDPResponse' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- UDP response writeback now has loopback coverage with real UDP sockets.
+- The test verifies the upstream reply address and payload survive SOCKS5 UDP packet encoding back to the original client.

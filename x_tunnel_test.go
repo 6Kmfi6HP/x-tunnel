@@ -7658,6 +7658,47 @@ func TestUDPAssociationHandleUDPResponseRejectsInvalidPort(t *testing.T) {
 	}
 }
 
+func TestUDPAssociationHandleUDPResponseWritesSOCKS5Packet(t *testing.T) {
+	relayConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen relay udp: %v", err)
+	}
+	defer relayConn.Close()
+
+	clientConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.ParseIP("127.0.0.1")})
+	if err != nil {
+		t.Fatalf("listen client udp: %v", err)
+	}
+	defer clientConn.Close()
+
+	assoc := &UDPAssociation{
+		udpListener:   relayConn,
+		clientUDPAddr: clientConn.LocalAddr().(*net.UDPAddr),
+	}
+	payload := []byte("dns-response")
+
+	assoc.handleUDPResponse("203.0.113.9:5300", payload)
+
+	if err := clientConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set client udp deadline: %v", err)
+	}
+	buf := make([]byte, 256)
+	n, _, err := clientConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("read UDP response: %v", err)
+	}
+	target, gotPayload, err := parseSOCKS5UDPPacket(buf[:n])
+	if err != nil {
+		t.Fatalf("parse SOCKS5 UDP response: %v", err)
+	}
+	if target != "203.0.113.9:5300" {
+		t.Fatalf("SOCKS5 UDP response target = %q, want %q", target, "203.0.113.9:5300")
+	}
+	if !bytes.Equal(gotPayload, payload) {
+		t.Fatalf("SOCKS5 UDP response payload = %q, want %q", gotPayload, payload)
+	}
+}
+
 func TestUDPAssociationSendWritesBoundTarget(t *testing.T) {
 	clientStream, serverStream := openRawAcceptedSmuxTestStream(t)
 	assoc := &UDPAssociation{
