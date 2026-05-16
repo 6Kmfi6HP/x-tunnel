@@ -2457,6 +2457,19 @@ Review:
 
 Post Phase 8 HTTP CONNECT TCPStatus error mapping:
 
-- [ ] Cover `handleHTTP` CONNECT when `openTCPStream` returns a negotiated TCPStatus error.
-- [ ] Verify the local response is `502 Bad Gateway` with an empty body.
-- [ ] Run focused/full/coverage/race verification and commit.
+- [x] Cover `handleHTTP` CONNECT when `openTCPStream` returns a negotiated TCPStatus error.
+- [x] Verify the local response is `502 Bad Gateway` with an empty body.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleHTTPConnect(ForwardsBufferedClientBytes|ReturnsBadGatewayOnTCPStatusError)|TestECHPoolOpenTCPStreamStatusError' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 73.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- HTTP CONNECT now has short real-smux coverage for both remote TCPStatus success and remote TCPStatus error paths.
+- A remote TCP open failure maps to local `502 Bad Gateway` with an empty body instead of starting an opaque tunnel.
