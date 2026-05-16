@@ -3320,6 +3320,100 @@ func TestHandleSOCKS5RejectsUnsupportedAddressType(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5ConnectProxiesOverSmux(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	})
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyIPv6Only
+
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{protocolCapabilityTCPStatus},
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindTCP || strategy != IPStrategyIPv6Only || target != "socks.example:443" {
+			serverDone <- fmt.Errorf("SOCKS5 CONNECT header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		if err := writeTCPOpenStatus(stream, tcpOpenStatusOK, ""); err != nil {
+			serverDone <- err
+			return
+		}
+		request := make([]byte, len("socks5-connect-request"))
+		if _, err := io.ReadFull(stream, request); err != nil {
+			serverDone <- err
+			return
+		}
+		if string(request) != "socks5-connect-request" {
+			serverDone <- fmt.Errorf("SOCKS5 CONNECT payload = %q", request)
+			return
+		}
+		serverDone <- writeAll(stream, []byte("socks5-connect-response"))
+	}()
+
+	proxyServer, proxyClient := net.Pipe()
+	_ = proxyServer.SetDeadline(time.Now().Add(time.Second))
+	_ = proxyClient.SetDeadline(time.Now().Add(time.Second))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		handleSOCKS5Connect(proxyServer, "socks.example:443")
+	}()
+
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(proxyClient, reply); err != nil {
+		t.Fatalf("read SOCKS5 CONNECT success reply: %v", err)
+	}
+	if reply[0] != 0x05 || reply[1] != 0x00 {
+		t.Fatalf("SOCKS5 CONNECT reply = %v, want success", reply)
+	}
+	if err := writeAll(proxyClient, []byte("socks5-connect-request")); err != nil {
+		t.Fatalf("write SOCKS5 CONNECT payload: %v", err)
+	}
+	response := make([]byte, len("socks5-connect-response"))
+	if _, err := io.ReadFull(proxyClient, response); err != nil {
+		t.Fatalf("read SOCKS5 CONNECT response: %v", err)
+	}
+	if string(response) != "socks5-connect-response" {
+		t.Fatalf("SOCKS5 CONNECT response = %q, want socks5-connect-response", response)
+	}
+	_ = proxyClient.Close()
+
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server SOCKS5 CONNECT stream handler: %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for SOCKS5 CONNECT handler shutdown")
+	}
+}
+
 func TestHandleSOCKS5RejectsMissingUserPassMethod(t *testing.T) {
 	got := socks5MethodSelection(t, &ProxyConfig{Username: "user", Password: "pass"}, []byte{0x00})
 	if !bytes.Equal(got, []byte{0x05, 0xff}) {

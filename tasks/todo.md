@@ -2297,3 +2297,23 @@ Review:
 
 - Local TCP forwarding now has a short real-smux handler test in addition to subprocess integration coverage.
 - The test verifies the open header, TCP status handshake, and bidirectional payload forwarding through `proxyConnStream`.
+
+Post Phase 8 SOCKS5 CONNECT handler coverage:
+
+- [x] Cover `handleSOCKS5Connect` with `net.Pipe` and a real smux session.
+- [x] Verify the SOCKS5 success reply after remote `TCPStatus OK`.
+- [x] Verify request and response bytes are proxied through the smux stream.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleSOCKS5ConnectProxiesOverSmux|TestHandleLocalTCPProxiesOverSmux' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 71.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- SOCKS5 CONNECT now has a short real-smux success-path test, including the local success reply.
+- The test verifies TCP open metadata and request/response payload forwarding through `proxyConnStream`.
