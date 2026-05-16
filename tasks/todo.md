@@ -1721,7 +1721,7 @@ Post Phase 8 SOCKS5 UDP hostname strictness:
 Verification:
 
 - `git diff --check`: pass.
-- `go test -run 'Test(SOCKS5UDPPacketMalformed|SOCKS5UDPRespMalformed|BuildSOCKS5UDPPacketRejectsInvalidDomain|ResolveUDPWithStrategy)' -count=1 ./...`: pass.
+- `go test -run 'Test(SOCKS5UDPPacketMalformed|SOCKS5UDPRespMalformed|BuildSOCKS5UDPPacketRejectsInvalidDomain|SOCKS5UDPPacketRoundTrip|SOCKS5UDPResp|ResolveUDPWithStrategy(LiteralIPs|LocalhostFamilies|RejectsInvalidPort))' -count=1 ./...`: pass.
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 61.3% of statements`.
 - `go test -race -count=1 ./...`: pass.
@@ -1753,6 +1753,18 @@ Post Phase 8 UDP resolve strategy coverage:
 - [x] Cover literal IPv4/IPv6 UDP targets resolving without DNS regardless of strategy.
 - [x] Cover localhost IPv4-only, IPv6-only, and preferred-family resolution when the address family exists locally.
 - [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- Covered by the focused SOCKS5 UDP verification command above.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 61.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Literal IP UDP resolution now has regression coverage proving strategy selection only affects DNS names.
+- Localhost family tests adapt to the address families present on the host, keeping the coverage portable.
 
 Verification:
 
