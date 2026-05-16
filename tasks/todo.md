@@ -3061,3 +3061,21 @@ Review:
 
 - HTTP proxy and CONNECT now return `403 Forbidden` for structured remote policy denials.
 - Legacy/unstructured remote open failures still return `502 Bad Gateway`, and the end-to-end TCPStatus integration test now verifies the negotiated policy-denied path.
+
+Post Phase 9 README metrics catalog:
+
+- [x] Document current server-side metrics in README.
+- [x] Document current client-side channel, RTT, reconnect, and protocol metrics in README.
+- [x] Run docs/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestWriteMetrics' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 77.5% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- README now lists the current server, UDP, client, and per-channel metrics instead of describing metrics only in broad categories.

@@ -113,7 +113,13 @@ Expose lightweight Prometheus-style counters with `-metrics`:
 curl http://127.0.0.1:9090/metrics
 ```
 
-Metrics include session/channel/active stream gauges, UDP association gauges and counters, protocol negotiation counters, and rejection counters for source CIDR, token auth, client limits, stream limits, target policy, and unsupported stream kinds.
+Metrics include:
+
+- Server gauges: `x_tunnel_server_sessions`, `x_tunnel_server_channels`, `x_tunnel_server_active_streams`.
+- Server counters: source CIDR, token auth, client-limit, stream-limit, target-policy, unsupported-stream, and protocol-negotiation outcomes.
+- UDP counters/gauges: total and active SOCKS5 UDP associations.
+- Client counters: reconnects, protocol negotiation outcomes, and RTT probe failures.
+- Client channel gauges: `x_tunnel_client_channel_up{channel="N"}` and `x_tunnel_client_channel_rtt_seconds{channel="N"}`.
 
 ## Config File
 
