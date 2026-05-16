@@ -1825,3 +1825,23 @@ Review:
 
 - DoH resolver URLs now reject userinfo and reuse the same hostname/IP/port validation policy as other proxy authorities.
 - Existing UDP-style DNS resolver validation remains unchanged, including hostnames, IPv4 literals, and bracketed IPv6 literals with valid ports.
+
+Post Phase 8 HTTP proxy auth response interop:
+
+- [x] Return a conventional English `407 Proxy Authentication Required` status line.
+- [x] Include `Content-Length: 0` on proxy-auth failure responses.
+- [x] Add focused tests for the auth challenge and empty-body framing.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestHandleHTTPRejectsProxyAuth|TestValidHTTPProxyBasicAuth' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 61.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- HTTP proxy auth failure now uses the conventional 407 reason phrase while preserving the required proxy-auth challenge header.
+- The response now advertises an explicit empty body, avoiding client ambiguity on failed proxy-auth attempts.

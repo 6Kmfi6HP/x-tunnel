@@ -4111,7 +4111,7 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	_ = c.SetDeadline(time.Time{})
 	if cfgp.Username != "" {
 		if !validHTTPProxyBasicAuth(req.Header.Get("Proxy-Authorization"), cfgp.Username, cfgp.Password) {
-			_ = writeHTTPProxyResponse(c, "HTTP/1.1 407 需要认证\r\nProxy-Authenticate: Basic realm=\"代理\"\r\n\r\n")
+			_ = writeHTTPProxyResponse(c, "HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"代理\"\r\nContent-Length: 0\r\n\r\n")
 			return
 		}
 	}

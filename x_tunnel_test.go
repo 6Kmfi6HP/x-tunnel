@@ -2678,8 +2678,21 @@ func TestHandleHTTPRejectsProxyAuth(t *testing.T) {
 			if resp.StatusCode != http.StatusProxyAuthRequired {
 				t.Fatalf("HTTP status = %d, want %d", resp.StatusCode, http.StatusProxyAuthRequired)
 			}
+			if resp.Status != "407 Proxy Authentication Required" {
+				t.Fatalf("HTTP status line = %q, want 407 Proxy Authentication Required", resp.Status)
+			}
 			if got := resp.Header.Get("Proxy-Authenticate"); got == "" {
 				t.Fatal("missing Proxy-Authenticate header")
+			}
+			if resp.ContentLength != 0 {
+				t.Fatalf("ContentLength = %d, want 0", resp.ContentLength)
+			}
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read auth response body: %v", err)
+			}
+			if len(body) != 0 {
+				t.Fatalf("auth response body = %q, want empty", body)
 			}
 		})
 	}
