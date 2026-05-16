@@ -1906,3 +1906,37 @@ Review:
 
 - The local proxy auth integration now validates real process 407 framing instead of only checking status codes.
 - Absolute-form HTTP proxy requests and CONNECT requests both prove standard status text, proxy-auth challenge, explicit empty body length, and empty response bodies.
+
+Post Phase 8 ECH DNS query coverage:
+
+- [ ] Cover UDP DNS HTTPS-record lookup against a local UDP DNS responder.
+- [ ] Cover DoH HTTPS-record lookup against a local HTTP DNS responder.
+- [ ] Cover `queryHTTPSRecord` routing for both DoH and UDP resolver inputs.
+- [ ] Run focused/full/coverage/race verification and commit.
+
+Post Phase 8 DNS ECH query transport coverage:
+
+- [x] Cover `queryDNSUDP` against a real loopback UDP DNS responder.
+- [x] Cover `queryHTTPSRecord` dispatching to UDP DNS transport.
+- [x] Cover `queryHTTPSRecord` dispatching to DoH transport with a successful response.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(QueryDNSUDPReturnsECH|QueryHTTPSRecordDispatchesTransports|QueryDoHRejectsOversizedResponse|BuildDNSQueryValidatesDomain)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 64.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- DNS ECH lookup now has real loopback UDP transport coverage returning a parsed HTTPS/ECH answer.
+- `queryHTTPSRecord` dispatch is covered for both UDP DNS and DoH success paths, including the DoH `dns` query parameter and DNS message accept header.
+
+Commit frequency and quality assessment:
+
+- [ ] Collect commit cadence, author, and churn metrics from Git history.
+- [ ] Inspect commit message style, commit size distribution, and test/doc coupling.
+- [ ] Sample repository quality signals from tests, CI, and recent diffs.
+- [ ] Summarize engineering-level assessment with evidence, caveats, and improvement suggestions.

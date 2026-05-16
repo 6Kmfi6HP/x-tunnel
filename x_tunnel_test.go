@@ -558,6 +558,100 @@ func TestQueryDoHRejectsOversizedResponse(t *testing.T) {
 	}
 }
 
+func TestQueryDNSUDPReturnsECH(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	addr := startDNSUDPResponder(t, []byte("udp-ech"))
+	got, err := queryDNSUDP("example.com", addr)
+	if err != nil {
+		t.Fatalf("queryDNSUDP returned error: %v", err)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte("udp-ech")); got != want {
+		t.Fatalf("queryDNSUDP = %q, want %q", got, want)
+	}
+}
+
+func TestQueryHTTPSRecordDispatchesTransports(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	udpAddr := startDNSUDPResponder(t, []byte("dispatch-udp"))
+	got, err := queryHTTPSRecord("example.com", udpAddr)
+	if err != nil {
+		t.Fatalf("queryHTTPSRecord UDP returned error: %v", err)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte("dispatch-udp")); got != want {
+		t.Fatalf("queryHTTPSRecord UDP = %q, want %q", got, want)
+	}
+
+	dohResponse, err := dnsHTTPSResponseSeed([]byte("dispatch-doh"))
+	if err != nil {
+		t.Fatalf("build DoH response seed: %v", err)
+	}
+	doh := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("dns") == "" {
+			t.Error("DoH request missing dns query parameter")
+		}
+		if got := r.Header.Get("Accept"); got != "application/dns-message" {
+			t.Errorf("DoH Accept header = %q, want application/dns-message", got)
+		}
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write(dohResponse)
+	}))
+	defer doh.Close()
+
+	got, err = queryHTTPSRecord("example.com", doh.URL)
+	if err != nil {
+		t.Fatalf("queryHTTPSRecord DoH returned error: %v", err)
+	}
+	if want := base64.StdEncoding.EncodeToString([]byte("dispatch-doh")); got != want {
+		t.Fatalf("queryHTTPSRecord DoH = %q, want %q", got, want)
+	}
+}
+
+func startDNSUDPResponder(t *testing.T, ech []byte) string {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen UDP DNS responder: %v", err)
+	}
+	response, err := dnsHTTPSResponseSeed(ech)
+	if err != nil {
+		t.Fatalf("build DNS response seed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 512)
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			done <- err
+			return
+		}
+		if n == 0 {
+			done <- errors.New("empty DNS query")
+			return
+		}
+		_, err = conn.WriteToUDP(response, addr)
+		done <- err
+	}()
+	t.Cleanup(func() {
+		_ = conn.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("UDP DNS responder failed: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for UDP DNS responder")
+		}
+	})
+	return conn.LocalAddr().String()
+}
+
 func TestClientSessionStreamLimitAccounting(t *testing.T) {
 	oldMaxStreams := maxStreamsPerClient
 	defer func() {
