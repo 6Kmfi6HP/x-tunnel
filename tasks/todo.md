@@ -2808,3 +2808,22 @@ Review:
 
 - Reconnect helper coverage now includes immediate zero-duration decisions, cancellation, and positive timer completion.
 - Jitter helper coverage now pins non-positive limits to a zero duration.
+
+Post Phase 8 UDPStatus legacy compatibility:
+
+- [x] Cover `openUDPStream` on a channel without `UDPStatus`.
+- [x] Assert legacy UDP open writes only the existing stream header and does not wait for a status frame.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestECHPoolOpenUDPStream|TestHandleSmuxStreamReturnsUDPStatus|TestUDPOpenStatus' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- UDPStatus now has explicit legacy compatibility coverage: channels without the capability do not wait for any status frame.
+- The test protects the original UDP stream open header behavior for old peers.

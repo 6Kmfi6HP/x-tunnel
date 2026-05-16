@@ -6205,6 +6205,50 @@ func TestECHPoolOpenUDPStreamStatusError(t *testing.T) {
 	}
 }
 
+func TestECHPoolOpenUDPStreamLegacyDoesNotWaitForStatus(t *testing.T) {
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() { ipStrategy = oldIPStrategy })
+	ipStrategy = IPStrategyDefault
+
+	pool := &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{0},
+	}
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindUDP || strategy != IPStrategyDefault || target != "example.com:53" {
+			serverDone <- fmt.Errorf("legacy UDP open header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		serverDone <- nil
+	}()
+
+	stream, chID, decision, err := pool.openUDPStream("example.com:53")
+	if err != nil {
+		t.Fatalf("openUDPStream legacy returned error: %v", err)
+	}
+	_ = stream.Close()
+	if chID != 1 || decision != 1 {
+		t.Fatalf("openUDPStream legacy chID=%d decision=%d, want 1/1", chID, decision)
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server read legacy UDP header: %v", err)
+	}
+}
+
 func TestECHPoolOpenTCPStreamStatusError(t *testing.T) {
 	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
 	oldCfg := cfg
