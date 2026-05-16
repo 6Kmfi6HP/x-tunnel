@@ -24,7 +24,7 @@ RSV(2) | FRAG(1) | ATYP(1) | DST.ADDR | DST.PORT(2) | DATA
 
 Good next work:
 
-- Keep SOCKS5 error mapping conservative. Remote TCP open failures currently map to general failure (`0x05`); a future small improvement could map target-policy failures to "connection not allowed by ruleset" (`0x02`) when the remote reason is structured enough.
+- Keep SOCKS5 error mapping conservative. Remote TCP open failures default to general failure (`0x05`), but structured `policy_denied` open errors map to "connection not allowed by ruleset" (`0x02`).
 - Keep UDP fragmentation unsupported unless there is a real user need; supporting it would require buffering, timeout, and resource-limit design.
 
 ## HTTP CONNECT And Local HTTP Proxying

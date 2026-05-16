@@ -201,7 +201,7 @@ New clients wait for this status before returning local SOCKS5 or HTTP CONNECT s
 
 Local failure mapping with TCPStatus:
 
-- SOCKS5 CONNECT returns a non-success SOCKS5 reply when the remote server rejects the target or cannot dial it.
+- SOCKS5 CONNECT returns a non-success SOCKS5 reply when the remote server rejects the target or cannot dial it. With OpenStatusCode, `PolicyDenied` maps to SOCKS5 reply `0x02` (connection not allowed by ruleset); other remote open failures still map to general failure `0x05`.
 - HTTP proxy and CONNECT requests return `502 Bad Gateway` after a remote target-policy or dial failure.
 - TCP forward listeners close the local connection when the remote open status is an error.
 - Malformed TCP stream targets are rejected before target-policy checks and use the same TCPStatus error path when available.

@@ -2974,6 +2974,17 @@ func formatOpenStatusError(status byte, code byte, message string) string {
 	return fmt.Sprintf("%s: %s", openStatusCodeName(code), message)
 }
 
+type remoteOpenError struct {
+	network string
+	status  byte
+	code    byte
+	message string
+}
+
+func (e *remoteOpenError) Error() string {
+	return fmt.Sprintf("远端 %s 打开失败: %s", e.network, formatOpenStatusError(e.status, e.code, e.message))
+}
+
 func writeTCPOpenSuccess(w io.Writer, caps uint32) error {
 	if caps&protocolCapabilityOpenStatusCode != 0 {
 		return writeTCPOpenStatusCode(w, tcpOpenStatusOK, openStatusCodeNone, "")
@@ -3000,6 +3011,14 @@ func writeUDPOpenFailure(w io.Writer, caps uint32, code byte, message string) er
 		return writeUDPOpenStatusCode(w, udpOpenStatusError, code, message)
 	}
 	return writeUDPOpenStatus(w, udpOpenStatusError, message)
+}
+
+func socks5ReplyForOpenError(err error) byte {
+	var openErr *remoteOpenError
+	if errors.As(err, &openErr) && openErr.code == openStatusCodePolicyDenied {
+		return 0x02
+	}
+	return 0x05
 }
 
 func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream) {
@@ -3576,7 +3595,7 @@ func (p *ECHPool) openTCPStream(target string) (*smux.Stream, int, int, error) {
 		}
 		if status != tcpOpenStatusOK {
 			_ = s.Close()
-			return nil, 0, 0, fmt.Errorf("远端 TCP 打开失败: %s", formatOpenStatusError(status, code, message))
+			return nil, 0, 0, &remoteOpenError{network: "TCP", status: status, code: code, message: message}
 		}
 	}
 	return s, chID, decision, nil
@@ -3608,7 +3627,7 @@ func (p *ECHPool) openUDPStream(target string) (*smux.Stream, int, int, error) {
 		}
 		if status != udpOpenStatusOK {
 			_ = s.Close()
-			return nil, 0, 0, fmt.Errorf("远端 UDP 打开失败: %s", formatOpenStatusError(status, code, message))
+			return nil, 0, 0, &remoteOpenError{network: "UDP", status: status, code: code, message: message}
 		}
 	}
 	return s, chID, decision, nil
@@ -4026,7 +4045,7 @@ func handleSOCKS5Connect(c net.Conn, target string) {
 	stream, _, decision, err := echPool.openTCPStream(target)
 	if err != nil {
 		log.Printf("[客户端] %s SOCKS5 打开失败 %s: %v", clientSourceAddr(c), target, err)
-		_ = writeSOCKS5Reply(c, 0x05)
+		_ = writeSOCKS5Reply(c, socks5ReplyForOpenError(err))
 		_ = c.Close()
 		return
 	}

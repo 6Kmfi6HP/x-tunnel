@@ -3001,3 +3001,24 @@ Review:
 - Open-status code framing is negotiated by `OpenStatusCode`; peers without it keep the old `status + msg_len + message` frame.
 - TCP and UDP open failures now carry stable structured codes for bad target, policy denied, dial/setup failure, and resource limit.
 - Protocol docs and tests cover both wire formats so future frame changes must be explicit.
+
+Post Phase 9 SOCKS5 policy-denied reply mapping:
+
+- [x] Preserve structured remote open error codes as typed errors in the client path.
+- [x] Map remote `policy_denied` TCP open failures to SOCKS5 reply `0x02`.
+- [x] Keep legacy/unstructured remote failures mapped to SOCKS5 reply `0x05`.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestHandleSOCKS5Connect.*|TestECHPoolOpenTCPStreamStatusCodeError|TestFormatOpenStatusError' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 77.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Structured remote open failures now survive as typed errors on the client path.
+- SOCKS5 CONNECT maps `policy_denied` to reply `0x02` while legacy/unstructured remote failures continue to return `0x05`.
+- Protocol and proxy research docs now describe the conservative mapping.

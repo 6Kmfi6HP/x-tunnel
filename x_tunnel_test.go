@@ -4297,6 +4297,76 @@ func TestHandleSOCKS5ConnectReturnsFailureOnTCPStatusError(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5ConnectMapsPolicyDeniedStatusCode(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	t.Cleanup(func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	})
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyDefault
+
+	serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{int64(5 * time.Millisecond)},
+		channelCaps: []uint32{protocolCapabilityTCPStatus | protocolCapabilityOpenStatusCode},
+	}
+
+	serverDone := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		defer stream.Close()
+		if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+			serverDone <- err
+			return
+		}
+		kind, strategy, target, err := readSmuxOpenHeader(stream)
+		if err != nil {
+			serverDone <- err
+			return
+		}
+		if kind != streamKindTCP || strategy != IPStrategyDefault || target != "blocked.example:443" {
+			serverDone <- fmt.Errorf("SOCKS5 CONNECT status-code header = kind %d strategy %d target %q", kind, strategy, target)
+			return
+		}
+		serverDone <- writeTCPOpenStatusCode(stream, tcpOpenStatusError, openStatusCodePolicyDenied, "blocked by policy")
+	}()
+
+	proxyServer, proxyClient := net.Pipe()
+	_ = proxyServer.SetDeadline(time.Now().Add(time.Second))
+	_ = proxyClient.SetDeadline(time.Now().Add(time.Second))
+	handlerDone := make(chan struct{})
+	go func() {
+		defer close(handlerDone)
+		handleSOCKS5Connect(proxyServer, "blocked.example:443")
+	}()
+
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(proxyClient, reply); err != nil {
+		t.Fatalf("read SOCKS5 CONNECT policy-denied reply: %v", err)
+	}
+	if reply[0] != 0x05 || reply[1] != 0x02 {
+		t.Fatalf("SOCKS5 CONNECT policy-denied reply = %v, want ruleset denied", reply)
+	}
+
+	if err := <-serverDone; err != nil {
+		t.Fatalf("server SOCKS5 CONNECT policy-denied handler: %v", err)
+	}
+	select {
+	case <-handlerDone:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for policy-denied SOCKS5 CONNECT handler shutdown")
+	}
+}
+
 func TestHandleSOCKS5RejectsMissingUserPassMethod(t *testing.T) {
 	got := socks5MethodSelection(t, &ProxyConfig{Username: "user", Password: "pass"}, []byte{0x00})
 	if !bytes.Equal(got, []byte{0x05, 0xff}) {
