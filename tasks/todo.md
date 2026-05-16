@@ -946,3 +946,18 @@ Verification:
 - `/tmp/x-tunnel-ci -version`: pass, `x-tunnel version=ci commit=local build=ci`.
 - `TARGETS=linux/amd64 DIST=/tmp/x-tunnel-dist VERSION=ci COMMIT=local BUILD_DATE=ci ./scripts/release.sh`: pass.
 - `test -s /tmp/x-tunnel-dist/SHA256SUMS`: pass.
+
+Post Phase 8 protocol writer short-write hardening:
+
+- [x] Add a shared write-all helper for protocol frame writers.
+- [x] Use it for protocol hello, TCP open status, smux open header, chunks, and UDP replies.
+- [x] Add focused tests that fail on short writes without errors.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(ProtocolWritersRejectShortWritesWithoutError|WriteAllHandlesProgressiveShortWrites|ProtocolHelloRoundTrip|TCPOpenStatusRoundTrip|SmuxOpenHeaderRoundTrip|ChunkRoundTrip|UDPReplyRoundTrip)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 46.0% of statements`.
+- `go test -race -count=1 ./...`: pass.

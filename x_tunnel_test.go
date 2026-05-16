@@ -2242,6 +2242,67 @@ func TestUDPReplyRejectsOversizedFields(t *testing.T) {
 	}
 }
 
+type shortWriteNoErrorWriter struct{}
+
+func (shortWriteNoErrorWriter) Write(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	return len(p) - 1, nil
+}
+
+type oneByteWriter struct {
+	bytes.Buffer
+}
+
+func (w *oneByteWriter) Write(p []byte) (int, error) {
+	if len(p) > 1 {
+		p = p[:1]
+	}
+	return w.Buffer.Write(p)
+}
+
+func TestProtocolWritersRejectShortWritesWithoutError(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(io.Writer) error
+	}{
+		{name: "protocol hello", run: func(w io.Writer) error {
+			return writeProtocolHello(w, ProtocolHello{Version: protocolVersion, Status: protocolStatusOK, Capabilities: currentProtocolCapabilities(), Message: "ok"})
+		}},
+		{name: "tcp open status", run: func(w io.Writer) error {
+			return writeTCPOpenStatus(w, tcpOpenStatusError, "dial failed")
+		}},
+		{name: "smux open header", run: func(w io.Writer) error {
+			return writeSmuxOpenHeader(w, streamKindTCP, IPStrategyDefault, "example.com:443")
+		}},
+		{name: "chunk", run: func(w io.Writer) error {
+			return writeChunk(w, []byte("payload"))
+		}},
+		{name: "udp reply", run: func(w io.Writer) error {
+			return writeUDPReply(w, "127.0.0.1:53", []byte("payload"))
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(shortWriteNoErrorWriter{}); err != io.ErrShortWrite {
+				t.Fatalf("writer error = %v, want %v", err, io.ErrShortWrite)
+			}
+		})
+	}
+}
+
+func TestWriteAllHandlesProgressiveShortWrites(t *testing.T) {
+	var w oneByteWriter
+	if err := writeAll(&w, []byte("payload")); err != nil {
+		t.Fatalf("writeAll returned error: %v", err)
+	}
+	if got := w.String(); got != "payload" {
+		t.Fatalf("writeAll wrote %q, want payload", got)
+	}
+}
+
 func FuzzReadSmuxOpenHeader(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte{streamKindTCP, IPStrategyDefault, 0, 0})

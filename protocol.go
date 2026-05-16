@@ -80,14 +80,13 @@ func writeProtocolHello(w io.Writer, hello ProtocolHello) error {
 	head[5] = hello.Status
 	binary.BigEndian.PutUint16(head[6:8], uint16(len(hello.Message)))
 	binary.BigEndian.PutUint32(head[8:12], hello.Capabilities)
-	if _, err := w.Write(head); err != nil {
+	if err := writeAll(w, head); err != nil {
 		return err
 	}
 	if hello.Message == "" {
 		return nil
 	}
-	_, err := w.Write([]byte(hello.Message))
-	return err
+	return writeAll(w, []byte(hello.Message))
 }
 
 func readProtocolHello(r io.Reader) (ProtocolHello, error) {
@@ -144,14 +143,13 @@ func writeTCPOpenStatus(w io.Writer, status byte, message string) error {
 	head := make([]byte, 3)
 	head[0] = status
 	binary.BigEndian.PutUint16(head[1:3], uint16(len(message)))
-	if _, err := w.Write(head); err != nil {
+	if err := writeAll(w, head); err != nil {
 		return err
 	}
 	if message == "" {
 		return nil
 	}
-	_, err := w.Write([]byte(message))
-	return err
+	return writeAll(w, []byte(message))
 }
 
 func readTCPOpenStatus(r io.Reader) (byte, string, error) {
@@ -194,14 +192,13 @@ func writeSmuxOpenHeader(w io.Writer, kind byte, strategy byte, target string) e
 	head[0] = kind
 	head[1] = strategy
 	binary.BigEndian.PutUint16(head[2:4], uint16(len(target)))
-	if _, err := w.Write(head); err != nil {
+	if err := writeAll(w, head); err != nil {
 		return err
 	}
 	if len(target) == 0 {
 		return nil
 	}
-	_, err := w.Write([]byte(target))
-	return err
+	return writeAll(w, []byte(target))
 }
 
 func writeChunk(w io.Writer, b []byte) error {
@@ -210,14 +207,13 @@ func writeChunk(w io.Writer, b []byte) error {
 	}
 	h := make([]byte, 2)
 	binary.BigEndian.PutUint16(h, uint16(len(b)))
-	if _, err := w.Write(h); err != nil {
+	if err := writeAll(w, h); err != nil {
 		return err
 	}
 	if len(b) == 0 {
 		return nil
 	}
-	_, err := w.Write(b)
-	return err
+	return writeAll(w, b)
 }
 
 func readChunk(r io.Reader) ([]byte, error) {
@@ -244,17 +240,36 @@ func writeUDPReply(w io.Writer, addr string, payload []byte) error {
 	head := make([]byte, 4)
 	binary.BigEndian.PutUint16(head[0:2], uint16(len(addr)))
 	binary.BigEndian.PutUint16(head[2:4], uint16(len(payload)))
-	if _, err := w.Write(head); err != nil {
+	if err := writeAll(w, head); err != nil {
 		return err
 	}
 	if len(addr) > 0 {
-		if _, err := w.Write([]byte(addr)); err != nil {
+		if err := writeAll(w, []byte(addr)); err != nil {
 			return err
 		}
 	}
 	if len(payload) > 0 {
-		if _, err := w.Write(payload); err != nil {
+		if err := writeAll(w, payload); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+func writeAll(w io.Writer, b []byte) error {
+	for len(b) > 0 {
+		n, err := w.Write(b)
+		if n > len(b) {
+			return io.ErrShortWrite
+		}
+		if n > 0 {
+			b = b[n:]
+		}
+		if err != nil {
+			return err
+		}
+		if n == 0 {
+			return io.ErrShortWrite
 		}
 	}
 	return nil
