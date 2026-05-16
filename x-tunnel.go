@@ -1864,70 +1864,14 @@ func (r *SOCKS5UDPRelay) Close() error {
 
 func buildSOCKS5UDPPacketData(target *net.UDPAddr, data []byte) []byte {
 	packet := []byte{0x00, 0x00, 0x00}
-	if ip4 := target.IP.To4(); ip4 != nil {
-		packet = append(packet, 0x01)
-		packet = append(packet, ip4...)
-	} else {
-		packet = append(packet, 0x04)
-		packet = append(packet, target.IP...)
-	}
-	portBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(portBytes, uint16(target.Port))
-	packet = append(packet, portBytes...)
+	packet = appendSOCKS5UDPAddr(packet, target.IP.String(), target.Port)
 	packet = append(packet, data...)
 	return packet
 }
 
 func parseSOCKS5UDPResp(packet []byte) (string, []byte, error) {
-	if len(packet) < 4 {
-		return "", nil, fmt.Errorf("数据包过短")
-	}
-	if packet[0] != 0 || packet[1] != 0 || packet[2] != 0 {
-		return "", nil, fmt.Errorf("RSV/FRAG 字段必须为 0")
-	}
-	atyp := packet[3]
-	offset := 4
-	var host string
-	switch atyp {
-	case 0x01:
-		if offset+4 > len(packet) {
-			return "", nil, fmt.Errorf("IPv4地址长度过短")
-		}
-		host = net.IP(packet[offset : offset+4]).String()
-		offset += 4
-	case 0x03:
-		if offset+1 > len(packet) {
-			return "", nil, fmt.Errorf("域名长度字段过短")
-		}
-		l := int(packet[offset])
-		if l == 0 {
-			return "", nil, fmt.Errorf("域名不能为空")
-		}
-		offset++
-		if offset+l > len(packet) {
-			return "", nil, fmt.Errorf("域名长度不足")
-		}
-		host = string(packet[offset : offset+l])
-		offset += l
-	case 0x04:
-		if offset+16 > len(packet) {
-			return "", nil, fmt.Errorf("IPv6地址长度过短")
-		}
-		host = net.IP(packet[offset : offset+16]).String()
-		offset += 16
-	default:
-		return "", nil, fmt.Errorf("地址类型无效: %d", atyp)
-	}
-	if offset+2 > len(packet) {
-		return "", nil, fmt.Errorf("端口字段过短")
-	}
-	port := int(packet[offset])<<8 | int(packet[offset+1])
-	if port == 0 {
-		return "", nil, fmt.Errorf("端口必须在 1-65535 之间")
-	}
-	offset += 2
-	addr := net.JoinHostPort(host, strconv.Itoa(port))
-	if err := validateHostPort(addr); err != nil {
+	addr, offset, err := parseSOCKS5UDPFrameAddr(packet)
+	if err != nil {
 		return "", nil, err
 	}
 	return addr, packet[offset:], nil
@@ -3996,57 +3940,11 @@ func (a *UDPAssociation) Close() {
 }
 
 func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
-	if len(b) < 4 || b[0] != 0 || b[1] != 0 || b[2] != 0 {
-		return "", nil, errors.New("数据不合法")
-	}
-	off := 4
-	var h string
-	switch b[3] {
-	case 0x01:
-		if off+4 > len(b) {
-			return "", nil, errors.New("IPv4地址长度过短")
-		}
-		h = net.IP(b[off : off+4]).String()
-		off += 4
-	case 0x03:
-		if off+1 > len(b) {
-			return "", nil, errors.New("域名长度不足")
-		}
-		l := int(b[off])
-		if l == 0 {
-			return "", nil, errors.New("域名不能为空")
-		}
-		off++
-		if off+l > len(b) {
-			return "", nil, errors.New("域名长度不足")
-		}
-		h = string(b[off : off+l])
-		off += l
-	case 0x04:
-		if off+16 > len(b) {
-			return "", nil, errors.New("IPv6地址长度过短")
-		}
-		h = net.IP(b[off : off+16]).String()
-		off += 16
-	default:
-		return "", nil, errors.New("地址类型无效")
-	}
-	if off+2 > len(b) {
-		return "", nil, errors.New("端口字段过短")
-	}
-	p := int(b[off])<<8 | int(b[off+1])
-	if p == 0 {
-		return "", nil, errors.New("端口必须在 1-65535 之间")
-	}
-	off += 2
-	t := fmt.Sprintf("%s:%d", h, p)
-	if b[3] == 0x04 {
-		t = fmt.Sprintf("[%s]:%d", h, p)
-	}
-	if err := validateHostPort(t); err != nil {
+	target, offset, err := parseSOCKS5UDPFrameAddr(b)
+	if err != nil {
 		return "", nil, err
 	}
-	return t, b[off:], nil
+	return target, b[offset:], nil
 }
 
 func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
@@ -4054,29 +3952,98 @@ func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
 		return nil, fmt.Errorf("端口必须在 1-65535 之间")
 	}
 	buf := []byte{0, 0, 0}
+	buf, err := appendSOCKS5UDPAddrChecked(buf, h, p)
+	if err != nil {
+		return nil, err
+	}
+	buf = append(buf, d...)
+	return buf, nil
+}
+
+func parseSOCKS5UDPFrameAddr(packet []byte) (string, int, error) {
+	if len(packet) < 4 {
+		return "", 0, fmt.Errorf("数据包过短")
+	}
+	if packet[0] != 0 || packet[1] != 0 || packet[2] != 0 {
+		return "", 0, fmt.Errorf("RSV/FRAG 字段必须为 0")
+	}
+	offset := 4
+	host, offset, err := parseSOCKS5AddrBytes(packet, packet[3], offset)
+	if err != nil {
+		return "", 0, err
+	}
+	if offset+2 > len(packet) {
+		return "", 0, fmt.Errorf("端口字段过短")
+	}
+	port := int(packet[offset])<<8 | int(packet[offset+1])
+	if port == 0 {
+		return "", 0, fmt.Errorf("端口必须在 1-65535 之间")
+	}
+	offset += 2
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	if err := validateHostPort(addr); err != nil {
+		return "", 0, err
+	}
+	return addr, offset, nil
+}
+
+func parseSOCKS5AddrBytes(packet []byte, atyp byte, offset int) (string, int, error) {
+	switch atyp {
+	case 0x01:
+		if offset+4 > len(packet) {
+			return "", 0, fmt.Errorf("IPv4地址长度过短")
+		}
+		return net.IP(packet[offset : offset+4]).String(), offset + 4, nil
+	case 0x03:
+		if offset+1 > len(packet) {
+			return "", 0, fmt.Errorf("域名长度字段过短")
+		}
+		l := int(packet[offset])
+		if l == 0 {
+			return "", 0, fmt.Errorf("域名不能为空")
+		}
+		offset++
+		if offset+l > len(packet) {
+			return "", 0, fmt.Errorf("域名长度不足")
+		}
+		return string(packet[offset : offset+l]), offset + l, nil
+	case 0x04:
+		if offset+16 > len(packet) {
+			return "", 0, fmt.Errorf("IPv6地址长度过短")
+		}
+		return net.IP(packet[offset : offset+16]).String(), offset + 16, nil
+	default:
+		return "", 0, fmt.Errorf("地址类型无效: %d", atyp)
+	}
+}
+
+func appendSOCKS5UDPAddrChecked(buf []byte, h string, p int) ([]byte, error) {
+	if h == "" {
+		return nil, fmt.Errorf("域名不能为空")
+	}
+	if len(h) > 255 {
+		return nil, fmt.Errorf("域名过长")
+	}
+	if err := validateHostnameOrIP(h); err != nil {
+		return nil, err
+	}
+	return appendSOCKS5UDPAddr(buf, h, p), nil
+}
+
+func appendSOCKS5UDPAddr(buf []byte, h string, p int) []byte {
 	ip := net.ParseIP(h)
 	if ip4 := ip.To4(); ip4 != nil {
 		buf = append(buf, 0x01)
 		buf = append(buf, ip4...)
 	} else if ip != nil {
 		buf = append(buf, 0x04)
-		buf = append(buf, ip...)
+		buf = append(buf, ip.To16()...)
 	} else {
-		if h == "" {
-			return nil, fmt.Errorf("域名不能为空")
-		}
-		if len(h) > 255 {
-			return nil, fmt.Errorf("域名过长")
-		}
-		if err := validateHostnameOrIP(h); err != nil {
-			return nil, err
-		}
 		buf = append(buf, 0x03, byte(len(h)))
 		buf = append(buf, h...)
 	}
 	buf = append(buf, byte(p>>8), byte(p))
-	buf = append(buf, d...)
-	return buf, nil
+	return buf
 }
 
 func runHTTPListener(ctx context.Context, addr string) {

@@ -2395,3 +2395,23 @@ Review:
 
 - CONNECT success responses now use the common ASCII `200 Connection Established` reason phrase.
 - Tests and docs lock the RFC 9110 tunnel response behavior: no `Content-Length` or `Transfer-Encoding` on successful CONNECT.
+
+Post Phase 8 SOCKS5 UDP address helper refactor:
+
+- [x] Share SOCKS5 UDP RSV/FRAG/ATYP host:port parsing between request and response paths.
+- [x] Share SOCKS5 UDP address header construction between relay responses and local packets.
+- [x] Preserve existing packet/response wrappers and RFC 1928 behavior.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(SOCKS5UDPPacket|SOCKS5UDPResp|BuildSOCKS5UDPPacket|SOCKS5UDPRelay|DirectUDPRelayer|WriteUDPDatagram|HandleSmuxStreamUDPProxiesDatagram)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 72.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- SOCKS5 UDP request and response parsing now share the same RFC 1928 RSV/FRAG/ATYP host:port parser.
+- Relay response and local UDP packet builders now share the same address header construction helper while preserving existing wrappers.
