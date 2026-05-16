@@ -1085,3 +1085,16 @@ Verification:
 - `go test -run 'Test(UDPReplyRoundTrip|ReadUDPReplyMalformed|UDPReplyRejectsOversizedFields)' -count=1 ./...`: pass.
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 47.1% of statements`.
+
+Post Phase 8 max-clients existing session regression:
+
+- [x] Add a real forwarded request through the first client after a second client is rejected.
+- [x] Keep existing rejection log and metric assertions intact.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run TestIntegrationMaxClientsRejectsNewClient -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 47.3% of statements`.

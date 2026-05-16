@@ -402,6 +402,13 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
+	const body = "x-tunnel max clients surviving session\n"
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(body))
+	}))
+	defer origin.Close()
+	targetAddr := strings.TrimPrefix(origin.URL, "http://")
+
 	binPath := filepath.Join(t.TempDir(), "x-tunnel")
 	build := exec.CommandContext(ctx, "go", "build", "-o", binPath, ".")
 	if out, err := build.CombinedOutput(); err != nil {
@@ -448,6 +455,7 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	waitLogContains(t, ctx, serverLog, "拒绝客户端会话")
 	waitLogContains(t, ctx, secondClientLog, "协议协商失败")
 	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_client_session_rejections_total", "1")
+	assertBody(t, "first client after max-clients rejection", fetchViaSOCKS5(t, firstSocksAddr, targetAddr, "/payload"), body)
 }
 
 func TestIntegrationSourceCIDRRejectionMetrics(t *testing.T) {
