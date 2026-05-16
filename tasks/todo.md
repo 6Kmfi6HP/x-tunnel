@@ -2550,3 +2550,23 @@ Review:
 
 - DoH lookup now has local HTTP coverage for non-200 status handling before DNS response parsing.
 - The test complements existing DoH success and oversized-response coverage.
+
+Post Phase 8 DNS and protocol negotiation error coverage:
+
+- [x] Cover `queryDoH` rejecting malformed DNS response bodies from a local DoH endpoint.
+- [x] Cover `queryDNSUDP` timeout and malformed UDP DNS response handling with local UDP listeners.
+- [x] Cover `negotiateClientProtocol` rejecting non-OK status, mismatched version, and missing required capabilities.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestQueryDoHRejectsMalformedDNSResponse|TestQueryDNSUDP(RejectsMalformedResponse|Timeout)|TestNegotiateClientProtocolRejectsBadResponses' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 74.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- DNS transport errors now have direct local coverage for malformed DoH bodies, malformed UDP DNS responses, and UDP DNS timeout behavior.
+- Client protocol negotiation rejects non-OK server status, unsupported protocol versions, and missing required capabilities before using the channel.

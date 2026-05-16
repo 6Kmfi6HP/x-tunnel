@@ -644,6 +644,22 @@ func TestQueryDoHRejectsHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestQueryDoHRejectsMalformedDNSResponse(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/dns-message")
+		_, _ = w.Write([]byte("bad"))
+	}))
+	defer server.Close()
+
+	if _, err := queryDoH("example.com", server.URL); err == nil || !strings.Contains(err.Error(), "响应过短") {
+		t.Fatalf("queryDoH malformed response err = %v", err)
+	}
+}
+
 func TestParseDNSResponseRejectsInvalidStatus(t *testing.T) {
 	seed, err := dnsHTTPSResponseSeed([]byte("ech"))
 	if err != nil {
@@ -691,6 +707,33 @@ func TestQueryDNSUDPReadsLargeECHResponse(t *testing.T) {
 	}
 	if want := base64.StdEncoding.EncodeToString(largeECH); got != want {
 		t.Fatalf("queryDNSUDP large ECH length = %d, want %d", len(got), len(want))
+	}
+}
+
+func TestQueryDNSUDPRejectsMalformedResponse(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = time.Second
+
+	addr := startDNSUDPRawResponder(t, []byte("bad"))
+	if _, err := queryDNSUDP("example.com", addr); err == nil || !strings.Contains(err.Error(), "响应过短") {
+		t.Fatalf("queryDNSUDP malformed response err = %v", err)
+	}
+}
+
+func TestQueryDNSUDPTimeout(t *testing.T) {
+	oldCfg := cfg
+	defer func() { cfg = oldCfg }()
+	cfg.DNSQueryTimeout = 50 * time.Millisecond
+
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen silent UDP DNS server: %v", err)
+	}
+	defer conn.Close()
+
+	if _, err := queryDNSUDP("example.com", conn.LocalAddr().String()); err == nil || !strings.Contains(err.Error(), "DNS 查询超时") {
+		t.Fatalf("queryDNSUDP timeout err = %v", err)
 	}
 }
 
@@ -786,6 +829,42 @@ func startDNSUDPResponder(t *testing.T, ech []byte) string {
 	response, err := dnsHTTPSResponseSeed(ech)
 	if err != nil {
 		t.Fatalf("build DNS response seed: %v", err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		buf := make([]byte, 512)
+		_ = conn.SetReadDeadline(time.Now().Add(time.Second))
+		n, addr, err := conn.ReadFromUDP(buf)
+		if err != nil {
+			done <- err
+			return
+		}
+		if n == 0 {
+			done <- errors.New("empty DNS query")
+			return
+		}
+		_, err = conn.WriteToUDP(response, addr)
+		done <- err
+	}()
+	t.Cleanup(func() {
+		_ = conn.Close()
+		select {
+		case err := <-done:
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				t.Fatalf("UDP DNS responder failed: %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("timed out waiting for UDP DNS responder")
+		}
+	})
+	return conn.LocalAddr().String()
+}
+
+func startDNSUDPRawResponder(t *testing.T, response []byte) string {
+	t.Helper()
+	conn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen UDP DNS responder: %v", err)
 	}
 	done := make(chan error, 1)
 	go func() {
@@ -5275,6 +5354,90 @@ func TestNegotiateClientProtocolSuccess(t *testing.T) {
 	}
 	if err := <-serverDone; err != nil {
 		t.Fatalf("server hello handler returned error: %v", err)
+	}
+}
+
+func TestNegotiateClientProtocolRejectsBadResponses(t *testing.T) {
+	tests := []struct {
+		name     string
+		response ProtocolHello
+		wantErr  string
+	}{
+		{
+			name: "status message",
+			response: ProtocolHello{
+				Version: protocolVersion,
+				Status:  protocolStatusNoCommonCapabilities,
+				Message: "missing required protocol capabilities",
+			},
+			wantErr: "协议协商失败: missing required protocol capabilities",
+		},
+		{
+			name: "status code",
+			response: ProtocolHello{
+				Version: protocolVersion,
+				Status:  protocolStatusUnsupportedVersion,
+			},
+			wantErr: "协议协商失败: status=1",
+		},
+		{
+			name: "version mismatch",
+			response: ProtocolHello{
+				Version:      protocolVersion + 1,
+				Status:       protocolStatusOK,
+				Capabilities: currentProtocolCapabilities(),
+			},
+			wantErr: "协议版本不匹配",
+		},
+		{
+			name: "missing required capabilities",
+			response: ProtocolHello{
+				Version:      protocolVersion,
+				Status:       protocolStatusOK,
+				Capabilities: protocolCapabilityTCP,
+			},
+			wantErr: "协议能力不足",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			serverSession, clientSession := newProtocolNegotiationSmuxPair(t)
+			serverDone := make(chan error, 1)
+			response := tt.response
+			go func() {
+				stream, err := serverSession.AcceptStream()
+				if err != nil {
+					serverDone <- err
+					return
+				}
+				defer stream.Close()
+				if err := stream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+					serverDone <- err
+					return
+				}
+				if _, _, _, err := readSmuxOpenHeader(stream); err != nil {
+					serverDone <- err
+					return
+				}
+				if _, err := readProtocolHello(stream); err != nil {
+					serverDone <- err
+					return
+				}
+				serverDone <- writeProtocolHello(stream, response)
+			}()
+
+			caps, legacy, err := negotiateClientProtocol(clientSession, time.Second)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("negotiateClientProtocol err = %v, want containing %q", err, tt.wantErr)
+			}
+			if legacy || caps != 0 {
+				t.Fatalf("negotiateClientProtocol bad response = caps 0x%x legacy %v, want caps 0 legacy false", caps, legacy)
+			}
+			if err := <-serverDone; err != nil {
+				t.Fatalf("server bad hello handler returned error: %v", err)
+			}
+		})
 	}
 }
 
