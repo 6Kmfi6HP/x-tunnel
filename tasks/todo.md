@@ -2885,3 +2885,22 @@ Review:
 
 - WebSocket dialing now has loopback coverage for URL-host override via an explicit IP target.
 - The test verifies the override replaces only the dial host while preserving the original WebSocket URL port.
+
+Post Phase 8 WebSocket dial host-port override coverage:
+
+- [x] Cover `dialWebSocketWithECH` when the explicit IP override includes its own port.
+- [x] Prove a host:port override can connect even when the URL port is not the backend port.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestDialWebSocketWithECH' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 76.5% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- WebSocket dialing now covers both IP-only override and host:port override branches.
+- The host:port test proves the override can connect to the backend even when the WebSocket URL carries a different port.

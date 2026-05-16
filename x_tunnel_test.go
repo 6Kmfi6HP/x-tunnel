@@ -2418,6 +2418,40 @@ func TestDialWebSocketWithECHIPOverride(t *testing.T) {
 	}
 }
 
+func TestDialWebSocketWithECHHostPortOverride(t *testing.T) {
+	oldCfg := cfg
+	t.Cleanup(func() { cfg = oldCfg })
+	cfg.WSHandshakeTimeout = time.Second
+	cfg.DialTimeout = time.Second
+	cfg.ReadBuf = 1024
+
+	upgraded := make(chan struct{}, 1)
+	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		conn, err := upgrader.Upgrade(w, r, nil)
+		if err != nil {
+			t.Errorf("upgrade websocket: %v", err)
+			return
+		}
+		upgraded <- struct{}{}
+		_ = conn.Close()
+	}))
+	defer server.Close()
+
+	wsURL := "ws://example.invalid:1"
+	conn, err := dialWebSocketWithECH(wsURL, 1, server.Listener.Addr().String(), "", 0)
+	if err != nil {
+		t.Fatalf("dialWebSocketWithECH host:port override returned error: %v", err)
+	}
+	_ = conn.Close()
+
+	select {
+	case <-upgraded:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for host:port override websocket upgrade")
+	}
+}
+
 func TestDialWebSocketWithECHWSSFallbackInsecure(t *testing.T) {
 	oldCfg := cfg
 	oldToken := token
