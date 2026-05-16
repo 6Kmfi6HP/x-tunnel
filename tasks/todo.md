@@ -1279,3 +1279,24 @@ Review:
 
 - Upstream SOCKS5 request writers now use `writeAll`, so progressive short writes are completed and silent short writes fail with `io.ErrShortWrite`.
 - Focused short-write regressions plus full, coverage, and race suites passed.
+
+Post Phase 8 local proxy response short-write handling:
+
+- [x] Add local SOCKS5 response writer helpers for method selection, auth replies, fixed command replies, and UDP ASSOCIATE replies.
+- [x] Use `writeAll` for local SOCKS5 method selection, auth, CONNECT failure/success, unsupported command, and UDP ASSOCIATE responses.
+- [x] Use `writeAll` for local SOCKS5 UDP ASSOCIATE replies.
+- [x] Use `writeAll` for local HTTP proxy status responses and buffered first request writes.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(LocalProxyResponseWriters|WriteSOCKS5UDPAssociateReplyRejectsInvalidAddress|HandleSOCKS5|HandleHTTP|HTTPProxyTarget|WriteAllHandlesProgressiveShortWrites|ProtocolWritersRejectShortWritesWithoutError)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 53.4% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Local SOCKS5 and HTTP proxy responses now complete progressive short writes and expose silent short writes as `io.ErrShortWrite` through shared helpers.
+- UDP ASSOCIATE replies now validate the response address and port before writing the protocol frame.

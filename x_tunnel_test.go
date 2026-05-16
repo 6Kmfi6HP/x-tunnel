@@ -1734,6 +1734,95 @@ func TestHandleSOCKS5UserPassAuthRejectsInvalidVersion(t *testing.T) {
 	}
 }
 
+func TestHandleSOCKS5MethodSelectionHandlesProgressiveShortWrites(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	done := make(chan struct{})
+	go func() {
+		handleSOCKS5(oneByteConn{Conn: server}, &ProxyConfig{})
+		close(done)
+	}()
+
+	if err := writeAll(client, []byte{0x05, 0x01, 0x00}); err != nil {
+		t.Fatalf("write SOCKS5 greeting: %v", err)
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read SOCKS5 method selection: %v", err)
+	}
+	if !bytes.Equal(resp, []byte{0x05, 0x00}) {
+		t.Fatalf("SOCKS5 method selection = %v, want [5 0]", resp)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handleSOCKS5 did not return after client close")
+	}
+}
+
+func TestHandleSOCKS5UserPassAuthHandlesProgressiveShortWrites(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- handleSOCKS5UserPassAuth(oneByteConn{Conn: server}, &ProxyConfig{Username: "user", Password: "pass"})
+	}()
+
+	if err := writeAll(client, []byte{0x01, 0x04, 'u', 's', 'e', 'r', 0x04, 'p', 'a', 's', 's'}); err != nil {
+		t.Fatalf("write SOCKS5 auth request: %v", err)
+	}
+	resp := make([]byte, 2)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read SOCKS5 auth response: %v", err)
+	}
+	if !bytes.Equal(resp, []byte{0x01, 0x00}) {
+		t.Fatalf("SOCKS5 auth response = %v, want [1 0]", resp)
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("handleSOCKS5UserPassAuth returned error: %v", err)
+	}
+}
+
+func TestHandleSOCKS5UDPAssociateHandlesProgressiveShortWrites(t *testing.T) {
+	server, client := net.Pipe()
+	defer server.Close()
+	defer client.Close()
+	_ = server.SetDeadline(time.Now().Add(time.Second))
+	_ = client.SetDeadline(time.Now().Add(time.Second))
+
+	done := make(chan struct{})
+	go func() {
+		handleSOCKS5UDP(oneByteConn{Conn: server}, &ProxyConfig{Host: "127.0.0.1:0"})
+		close(done)
+	}()
+
+	resp := make([]byte, 10)
+	if _, err := io.ReadFull(client, resp); err != nil {
+		t.Fatalf("read SOCKS5 UDP associate response: %v", err)
+	}
+	if !bytes.Equal(resp[:4], []byte{0x05, 0x00, 0x00, 0x01}) {
+		t.Fatalf("SOCKS5 UDP associate response head = %v, want [5 0 0 1]", resp[:4])
+	}
+	if port := int(resp[8])<<8 | int(resp[9]); port == 0 {
+		t.Fatalf("SOCKS5 UDP associate port = %d, want non-zero", port)
+	}
+	_ = client.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("handleSOCKS5UDP did not return after client close")
+	}
+}
+
 func TestHandleSOCKS5RejectsZeroConnectPort(t *testing.T) {
 	server, client := net.Pipe()
 	defer server.Close()
@@ -3107,6 +3196,127 @@ func TestProtocolWritersRejectShortWritesWithoutError(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.run(shortWriteNoErrorWriter{}); err != io.ErrShortWrite {
 				t.Fatalf("writer error = %v, want %v", err, io.ErrShortWrite)
+			}
+		})
+	}
+}
+
+func TestLocalProxyResponseWritersHandleProgressiveShortWrites(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(io.Writer) error
+		want []byte
+	}{
+		{
+			name: "SOCKS5 method selection",
+			run: func(w io.Writer) error {
+				return writeSOCKS5MethodSelection(w, 0x02)
+			},
+			want: []byte{0x05, 0x02},
+		},
+		{
+			name: "SOCKS5 userpass reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5UserPassReply(w, 0x00)
+			},
+			want: []byte{0x01, 0x00},
+		},
+		{
+			name: "SOCKS5 command reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5Reply(w, 0x07)
+			},
+			want: []byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0},
+		},
+		{
+			name: "SOCKS5 UDP associate reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5UDPAssociateReply(w, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1080})
+			},
+			want: []byte{0x05, 0x00, 0x00, 0x01, 127, 0, 0, 1, 0x04, 0x38},
+		},
+		{
+			name: "HTTP proxy response",
+			run: func(w io.Writer) error {
+				return writeHTTPProxyResponse(w, "HTTP/1.1 200 OK\r\n\r\n")
+			},
+			want: []byte("HTTP/1.1 200 OK\r\n\r\n"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var w oneByteWriter
+			if err := tt.run(&w); err != nil {
+				t.Fatalf("writer returned error: %v", err)
+			}
+			if got := w.Bytes(); !bytes.Equal(got, tt.want) {
+				t.Fatalf("writer output = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLocalProxyResponseWritersRejectShortWritesWithoutError(t *testing.T) {
+	tests := []struct {
+		name string
+		run  func(io.Writer) error
+	}{
+		{
+			name: "SOCKS5 method selection",
+			run: func(w io.Writer) error {
+				return writeSOCKS5MethodSelection(w, 0x02)
+			},
+		},
+		{
+			name: "SOCKS5 userpass reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5UserPassReply(w, 0x00)
+			},
+		},
+		{
+			name: "SOCKS5 command reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5Reply(w, 0x07)
+			},
+		},
+		{
+			name: "SOCKS5 UDP associate reply",
+			run: func(w io.Writer) error {
+				return writeSOCKS5UDPAssociateReply(w, &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1080})
+			},
+		},
+		{
+			name: "HTTP proxy response",
+			run: func(w io.Writer) error {
+				return writeHTTPProxyResponse(w, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.run(shortWriteNoErrorWriter{}); err != io.ErrShortWrite {
+				t.Fatalf("writer error = %v, want %v", err, io.ErrShortWrite)
+			}
+		})
+	}
+}
+
+func TestWriteSOCKS5UDPAssociateReplyRejectsInvalidAddress(t *testing.T) {
+	tests := []struct {
+		name string
+		addr *net.UDPAddr
+	}{
+		{name: "nil", addr: nil},
+		{name: "zero port", addr: &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)}},
+		{name: "invalid ip", addr: &net.UDPAddr{Port: 1080}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := writeSOCKS5UDPAssociateReply(io.Discard, tt.addr); err == nil {
+				t.Fatal("writeSOCKS5UDPAssociateReply accepted invalid address")
 			}
 		})
 	}

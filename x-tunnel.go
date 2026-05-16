@@ -3523,19 +3523,23 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	}
 	if cfgp.Username != "" {
 		if !bytes.Contains(methods, []byte{0x02}) {
-			_, _ = c.Write([]byte{0x05, 0xff})
+			_ = writeSOCKS5MethodSelection(c, 0xff)
 			return
 		}
-		_, _ = c.Write([]byte{0x05, 0x02})
+		if err := writeSOCKS5MethodSelection(c, 0x02); err != nil {
+			return
+		}
 		if err := handleSOCKS5UserPassAuth(c, cfgp); err != nil {
 			return
 		}
 	} else {
 		if !bytes.Contains(methods, []byte{0x00}) {
-			_, _ = c.Write([]byte{0x05, 0xff})
+			_ = writeSOCKS5MethodSelection(c, 0xff)
 			return
 		}
-		_, _ = c.Write([]byte{0x05, 0x00})
+		if err := writeSOCKS5MethodSelection(c, 0x00); err != nil {
+			return
+		}
 	}
 
 	head := make([]byte, 4)
@@ -3543,7 +3547,7 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 		return
 	}
 	if head[2] != 0x00 {
-		_, _ = c.Write([]byte{0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		_ = writeSOCKS5Reply(c, 0x01)
 		return
 	}
 	var target string
@@ -3571,7 +3575,7 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 		}
 		target = net.IP(b).String()
 	default:
-		_, _ = c.Write([]byte{0x05, 0x08, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		_ = writeSOCKS5Reply(c, 0x08)
 		return
 	}
 	pb := make([]byte, 2)
@@ -3580,7 +3584,7 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	}
 	port := int(pb[0])<<8 | int(pb[1])
 	if head[1] == 0x01 && port == 0 {
-		_, _ = c.Write([]byte{0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		_ = writeSOCKS5Reply(c, 0x04)
 		return
 	}
 	target = net.JoinHostPort(target, fmt.Sprintf("%d", port))
@@ -3592,13 +3596,13 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	if head[1] == 0x01 {
 		if ipStrategy == IPStrategyIPv4Only {
 			if head[3] == 0x04 || (ip != nil && ip.To4() == nil) {
-				_, _ = c.Write([]byte{0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				_ = writeSOCKS5Reply(c, 0x02)
 				return
 			}
 		}
 		if ipStrategy == IPStrategyIPv6Only {
 			if head[3] == 0x01 || (ip != nil && ip.To4() != nil) {
-				_, _ = c.Write([]byte{0x05, 0x02, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+				_ = writeSOCKS5Reply(c, 0x02)
 				return
 			}
 		}
@@ -3612,8 +3616,43 @@ func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	case 0x03:
 		handleSOCKS5UDP(c, cfgp)
 	default:
-		_, _ = c.Write([]byte{0x05, 0x07, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		_ = writeSOCKS5Reply(c, 0x07)
 	}
+}
+
+func writeSOCKS5MethodSelection(w io.Writer, method byte) error {
+	return writeAll(w, []byte{0x05, method})
+}
+
+func writeSOCKS5UserPassReply(w io.Writer, status byte) error {
+	return writeAll(w, []byte{0x01, status})
+}
+
+func writeSOCKS5Reply(w io.Writer, status byte) error {
+	return writeAll(w, []byte{0x05, status, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+}
+
+func writeSOCKS5UDPAssociateReply(w io.Writer, addr *net.UDPAddr) error {
+	if addr == nil {
+		return errors.New("SOCKS5 UDP ASSOCIATE 响应地址为空")
+	}
+	if addr.Port <= 0 || addr.Port > 65535 {
+		return fmt.Errorf("SOCKS5 UDP ASSOCIATE 响应端口无效: %d", addr.Port)
+	}
+	resp := []byte{0x05, 0x00, 0x00}
+	if ip4 := addr.IP.To4(); ip4 != nil {
+		resp = append(resp, 0x01)
+		resp = append(resp, ip4...)
+	} else {
+		ip16 := addr.IP.To16()
+		if ip16 == nil {
+			return errors.New("SOCKS5 UDP ASSOCIATE 响应地址无效")
+		}
+		resp = append(resp, 0x04)
+		resp = append(resp, ip16...)
+	}
+	resp = append(resp, byte(addr.Port>>8), byte(addr.Port))
+	return writeAll(w, resp)
 }
 
 func handleSOCKS5UserPassAuth(c net.Conn, cfgp *ProxyConfig) error {
@@ -3622,7 +3661,9 @@ func handleSOCKS5UserPassAuth(c net.Conn, cfgp *ProxyConfig) error {
 		return err
 	}
 	if b[0] != 0x01 {
-		_, _ = c.Write([]byte{0x01, 0x01})
+		if err := writeSOCKS5UserPassReply(c, 0x01); err != nil {
+			return err
+		}
 		return fmt.Errorf("SOCKS5 用户名密码认证版本无效: %d", b[0])
 	}
 	u := make([]byte, b[1])
@@ -3637,10 +3678,11 @@ func handleSOCKS5UserPassAuth(c net.Conn, cfgp *ProxyConfig) error {
 		return err
 	}
 	if string(u) == cfgp.Username && string(p) == cfgp.Password {
-		_, _ = c.Write([]byte{0x01, 0x00})
-		return nil
+		return writeSOCKS5UserPassReply(c, 0x00)
 	}
-	_, _ = c.Write([]byte{0x01, 0x01})
+	if err := writeSOCKS5UserPassReply(c, 0x01); err != nil {
+		return err
+	}
 	return errors.New("认证失败")
 }
 
@@ -3648,11 +3690,11 @@ func handleSOCKS5Connect(c net.Conn, target string) {
 	stream, _, decision, err := echPool.openTCPStream(target)
 	if err != nil {
 		log.Printf("[客户端] %s SOCKS5 打开失败 %s: %v", clientSourceAddr(c), target, err)
-		_, _ = c.Write([]byte{0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0})
+		_ = writeSOCKS5Reply(c, 0x05)
 		_ = c.Close()
 		return
 	}
-	if _, err := c.Write([]byte{0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0}); err != nil {
+	if err := writeSOCKS5Reply(c, 0x00); err != nil {
 		_ = stream.Close()
 		_ = c.Close()
 		return
@@ -3677,16 +3719,7 @@ func handleSOCKS5UDP(c net.Conn, cfgp *ProxyConfig) {
 		_ = c.Close()
 		return
 	}
-	resp := []byte{0x05, 0x00, 0x00}
-	if ip4 := actual.IP.To4(); ip4 != nil {
-		resp = append(resp, 0x01)
-		resp = append(resp, ip4...)
-	} else {
-		resp = append(resp, 0x04)
-		resp = append(resp, actual.IP...)
-	}
-	resp = append(resp, byte(actual.Port>>8), byte(actual.Port))
-	if _, err := c.Write(resp); err != nil {
+	if err := writeSOCKS5UDPAssociateReply(c, actual); err != nil {
 		_ = c.Close()
 		return
 	}
@@ -3982,7 +4015,7 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 			}
 		}
 		if !ok {
-			_, _ = c.Write([]byte("HTTP/1.1 407 需要认证\r\nProxy-Authenticate: Basic realm=\"代理\"\r\n\r\n"))
+			_ = writeHTTPProxyResponse(c, "HTTP/1.1 407 需要认证\r\nProxy-Authenticate: Basic realm=\"代理\"\r\n\r\n")
 			return
 		}
 	}
@@ -3990,7 +4023,7 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 
 	target, err := httpProxyTarget(req)
 	if err != nil {
-		_, _ = c.Write([]byte("HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n"))
+		_ = writeHTTPProxyResponse(c, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n")
 		return
 	}
 
@@ -4008,11 +4041,11 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	stream, _, decision, err := echPool.openTCPStream(target)
 	if err != nil {
 		log.Printf("[客户端] %s HTTP 打开失败 %s: %v", clientSourceAddr(c), target, err)
-		_, _ = c.Write([]byte("HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n"))
+		_ = writeHTTPProxyResponse(c, "HTTP/1.1 502 Bad Gateway\r\nContent-Length: 0\r\n\r\n")
 		return
 	}
 	if req.Method == "CONNECT" {
-		if _, err := c.Write([]byte("HTTP/1.1 200 连接已建立\r\n\r\n")); err != nil {
+		if err := writeHTTPProxyResponse(c, "HTTP/1.1 200 连接已建立\r\n\r\n"); err != nil {
 			_ = stream.Close()
 			return
 		}
@@ -4022,7 +4055,7 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 		}
 	}
 	if len(first) > 0 {
-		if _, err := stream.Write(first); err != nil {
+		if err := writeAll(stream, first); err != nil {
 			_ = stream.Close()
 			return
 		}
@@ -4030,6 +4063,10 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	logClientConnEvent(c, "HTTP", target, decision, true)
 	defer logClientConnEvent(c, "HTTP", target, decision, false)
 	proxyConnStream(c, stream)
+}
+
+func writeHTTPProxyResponse(w io.Writer, response string) error {
+	return writeAll(w, []byte(response))
 }
 
 func forwardBufferedHTTPBytes(br *bufio.Reader, stream io.Writer) error {
