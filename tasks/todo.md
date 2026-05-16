@@ -1460,5 +1460,5 @@ Verification:
 
 Review:
 
-- Ordinary HTTP proxy requests now remove both locally consumed `Proxy-Authorization` and proxy-only `Proxy-Connection` before forwarding.
-- `docs/protocol.md` now documents the stripped proxy headers.
+- Ordinary HTTP proxy requests now remove locally consumed `Proxy-Authorization`, proxy-only `Proxy-Connection`, fields named by `Connection`, and common hop-by-hop headers before forwarding.
+- `docs/protocol.md` now documents the forwarded-header boundary for HTTP proxy requests.

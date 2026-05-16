@@ -2422,19 +2422,31 @@ func TestStripHTTPProxyHeaders(t *testing.T) {
 	h := http.Header{}
 	h.Set("Proxy-Authorization", "Basic secret")
 	h.Set("Proxy-Connection", "keep-alive")
-	h.Set("Connection", "close")
+	h.Set("Connection", "keep-alive, X-Hop")
+	h.Set("Keep-Alive", "timeout=5")
+	h.Set("TE", "trailers")
+	h.Set("Trailer", "X-Trailer")
+	h.Set("Transfer-Encoding", "chunked")
+	h.Set("Upgrade", "websocket")
+	h.Set("X-Hop", "remove me")
 	h.Set("User-Agent", "x-tunnel-test")
 
 	stripHTTPProxyHeaders(h)
 
-	if got := h.Get("Proxy-Authorization"); got != "" {
-		t.Fatalf("Proxy-Authorization header = %q, want removed", got)
-	}
-	if got := h.Get("Proxy-Connection"); got != "" {
-		t.Fatalf("Proxy-Connection header = %q, want removed", got)
-	}
-	if got := h.Get("Connection"); got != "close" {
-		t.Fatalf("Connection header = %q, want close", got)
+	for _, name := range []string{
+		"Proxy-Authorization",
+		"Proxy-Connection",
+		"Connection",
+		"Keep-Alive",
+		"TE",
+		"Trailer",
+		"Transfer-Encoding",
+		"Upgrade",
+		"X-Hop",
+	} {
+		if got := h.Get(name); got != "" {
+			t.Fatalf("%s header = %q, want removed", name, got)
+		}
 	}
 	if got := h.Get("User-Agent"); got != "x-tunnel-test" {
 		t.Fatalf("User-Agent header = %q, want x-tunnel-test", got)

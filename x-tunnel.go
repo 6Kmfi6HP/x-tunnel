@@ -4130,9 +4130,29 @@ func writeHTTPProxyResponse(w io.Writer, response string) error {
 	return writeAll(w, []byte(response))
 }
 
+var httpHopByHopHeaders = []string{
+	"Connection",
+	"Keep-Alive",
+	"Proxy-Authenticate",
+	"Proxy-Authorization",
+	"Proxy-Connection",
+	"TE",
+	"Trailer",
+	"Transfer-Encoding",
+	"Upgrade",
+}
+
 func stripHTTPProxyHeaders(h http.Header) {
-	h.Del("Proxy-Authorization")
-	h.Del("Proxy-Connection")
+	for _, connection := range h.Values("Connection") {
+		for _, token := range strings.Split(connection, ",") {
+			if token = strings.TrimSpace(token); token != "" {
+				h.Del(token)
+			}
+		}
+	}
+	for _, name := range httpHopByHopHeaders {
+		h.Del(name)
+	}
 }
 
 func forwardBufferedHTTPBytes(br *bufio.Reader, stream io.Writer) error {
