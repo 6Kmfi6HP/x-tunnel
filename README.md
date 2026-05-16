@@ -119,7 +119,7 @@ Metrics include:
 - Server counters: source CIDR, token auth, client-limit, stream-limit, target-policy, unsupported-stream, and protocol-negotiation outcomes.
 - UDP counters/gauges: total and active SOCKS5 UDP associations.
 - Client counters: reconnects, protocol negotiation outcomes, and RTT probe failures.
-- Client channel gauges: `x_tunnel_client_channel_up{channel="N"}` and `x_tunnel_client_channel_rtt_seconds{channel="N"}`.
+- Client channel gauges: `x_tunnel_client_channel_up{channel="N"}`, `x_tunnel_client_channel_rtt_seconds{channel="N"}`, and `x_tunnel_client_channel_capabilities{channel="N"}`.
 
 ## Config File
 

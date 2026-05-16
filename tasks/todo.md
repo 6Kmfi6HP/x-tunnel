@@ -3098,3 +3098,23 @@ Review:
 
 - The local tunnel integration test now verifies the live client metrics endpoint includes RTT probe failure and channel RTT metrics.
 - It also asserts `x_tunnel_client_channel_up{channel="1"} 1` after real tunnel traffic succeeds.
+
+Post Phase 10 client channel capability metrics:
+
+- [x] Export negotiated capability bits per client channel in `/metrics`.
+- [x] Cover the metric in unit and local integration tests.
+- [x] Update README metrics documentation.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `go test -run 'TestWriteMetrics|TestLocalTunnelIntegration' -count=1 ./...`: pass.
+- `git diff --check`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 77.5% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Client metrics now expose the negotiated capability bitset for each channel.
+- Unit and local integration tests assert the new metric, with the integration assertion derived from `currentProtocolCapabilities()` instead of a stale hard-coded value.

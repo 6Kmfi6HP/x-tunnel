@@ -247,8 +247,9 @@ func TestWriteMetrics(t *testing.T) {
 	})
 	_, clientSession := newProtocolNegotiationSmuxPair(t)
 	echPool = &ECHPool{
-		smuxConns:  []*smux.Session{clientSession, nil},
-		channelRTT: []int64{int64(25 * time.Millisecond), 0},
+		smuxConns:   []*smux.Session{clientSession, nil},
+		channelRTT:  []int64{int64(25 * time.Millisecond), 0},
+		channelCaps: []uint32{protocolCapabilityTCPStatus | protocolCapabilityOpenStatusCode, 0},
 	}
 
 	var buf bytes.Buffer
@@ -277,8 +278,10 @@ func TestWriteMetrics(t *testing.T) {
 		"x_tunnel_server_active_streams 5",
 		"x_tunnel_client_channel_up{channel=\"1\"} 1",
 		"x_tunnel_client_channel_rtt_seconds{channel=\"1\"} 0.025000000",
+		"x_tunnel_client_channel_capabilities{channel=\"1\"} 80",
 		"x_tunnel_client_channel_up{channel=\"2\"} 0",
 		"x_tunnel_client_channel_rtt_seconds{channel=\"2\"} 0.000000000",
+		"x_tunnel_client_channel_capabilities{channel=\"2\"} 0",
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("metrics output missing %q:\n%s", want, got)

@@ -138,6 +138,12 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	assertMetricPresent(t, clientMetrics, "x_tunnel_client_rtt_probe_failures_total")
 	assertMetricPresent(t, clientMetrics, "x_tunnel_client_channel_rtt_seconds")
 	assertMetricValue(t, clientMetrics, `x_tunnel_client_channel_up{channel="1"}`, "1")
+	assertMetricValue(
+		t,
+		clientMetrics,
+		`x_tunnel_client_channel_capabilities{channel="1"}`,
+		strconv.FormatUint(uint64(currentProtocolCapabilities()), 10),
+	)
 
 	badClient := startXTunnel(t, ctx, binPath, badClientLog,
 		"-l", "socks5://"+freeTCPAddr(t),

@@ -2705,6 +2705,7 @@ func writeClientChannelMetrics(w io.Writer, pool *ECHPool) {
 	}
 	fmt.Fprintf(w, "# TYPE x_tunnel_client_channel_up gauge\n")
 	fmt.Fprintf(w, "# TYPE x_tunnel_client_channel_rtt_seconds gauge\n")
+	fmt.Fprintf(w, "# TYPE x_tunnel_client_channel_capabilities gauge\n")
 	pool.wsConnsMu.RLock()
 	defer pool.wsConnsMu.RUnlock()
 	for i := range pool.channelRTT {
@@ -2712,10 +2713,15 @@ func writeClientChannelMetrics(w io.Writer, pool *ECHPool) {
 		if i < len(pool.smuxConns) && pool.smuxConns[i] != nil && !pool.smuxConns[i].IsClosed() {
 			up = 1
 		}
+		var caps uint32
+		if i < len(pool.channelCaps) {
+			caps = pool.channelCaps[i]
+		}
 		rttSeconds := float64(atomic.LoadInt64(&pool.channelRTT[i])) / float64(time.Second)
 		channelID := i + 1
 		fmt.Fprintf(w, "x_tunnel_client_channel_up{channel=\"%d\"} %d\n", channelID, up)
 		fmt.Fprintf(w, "x_tunnel_client_channel_rtt_seconds{channel=\"%d\"} %.9f\n", channelID, rttSeconds)
+		fmt.Fprintf(w, "x_tunnel_client_channel_capabilities{channel=\"%d\"} %d\n", channelID, caps)
 	}
 }
 
