@@ -197,7 +197,7 @@ The server echoes the exact 8-byte payload. The client measures RTT around write
 
 ## 8. UDP Stream
 
-A UDP stream is opened for one current target. Client-to-server datagrams are sent as chunks:
+A UDP stream is opened for one current target. The local SOCKS5 UDP association binds to the first requested `DST.ADDR:DST.PORT`; later packets for a different target are dropped instead of being sent over the already-bound stream. Client-to-server datagrams are sent as chunks:
 
 ```text
 0                   1

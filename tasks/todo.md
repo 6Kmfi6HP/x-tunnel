@@ -1169,3 +1169,33 @@ Verification:
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 47.9% of statements`.
 - `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 SOCKS5 UDP association target binding:
+
+- [x] Drop packets whose SOCKS5 UDP target differs from the association's bound target.
+- [x] Add unit coverage that same-target packets still write and changed-target packets do not.
+- [x] Document the single-target association behavior.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(UDPAssociationSendWritesBoundTarget|UDPAssociationSendDropsChangedTarget|UDPAssociationHandleUDPResponseRejectsInvalidPort|SOCKS5UDPPacket|SOCKS5UDPResp)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 50.8% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 HTTP CONNECT buffered early data:
+
+- [x] Forward bytes already buffered by `http.ReadRequest` after a successful CONNECT response.
+- [x] Preserve existing CONNECT and non-CONNECT proxy behavior.
+- [x] Add focused handleHTTP coverage for CONNECT headers and first tunnel bytes in one write.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(UDPAssociationSend|HandleHTTPConnectForwardsBufferedClientBytes|HandleHTTPRejectsMalformedProxyTarget|HandleHTTPRejectsUnsupportedAbsoluteFormScheme|HTTPProxyTarget|LocalTunnelIntegration)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 50.8% of statements`.
+- `go test -race -count=1 ./...`: pass.

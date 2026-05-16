@@ -1967,6 +1967,107 @@ func TestHandleHTTPRejectsUnsupportedAbsoluteFormScheme(t *testing.T) {
 	}
 }
 
+func TestHandleHTTPConnectForwardsBufferedClientBytes(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	defer func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	}()
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyDefault
+
+	serverConn, clientConn := net.Pipe()
+	serverSession, err := smux.Server(serverConn, nil)
+	if err != nil {
+		t.Fatalf("smux server: %v", err)
+	}
+	clientSession, err := smux.Client(clientConn, nil)
+	if err != nil {
+		t.Fatalf("smux client: %v", err)
+	}
+	t.Cleanup(func() {
+		serverSession.Close()
+		clientSession.Close()
+		serverConn.Close()
+		clientConn.Close()
+	})
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{1},
+		channelCaps: []uint32{0},
+	}
+
+	accepted := make(chan *smux.Stream, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- stream
+	}()
+
+	proxyServer, proxyClient := net.Pipe()
+	_ = proxyServer.SetDeadline(time.Now().Add(time.Second))
+	_ = proxyClient.SetDeadline(time.Now().Add(time.Second))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleHTTP(proxyServer, &ProxyConfig{})
+	}()
+
+	early := []byte("early-client-bytes")
+	req := append([]byte("CONNECT example.com:443 HTTP/1.1\r\nHost: example.com:443\r\n\r\n"), early...)
+	if err := writeAll(proxyClient, req); err != nil {
+		t.Fatalf("write CONNECT request with early bytes: %v", err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(proxyClient), nil)
+	if err != nil {
+		t.Fatalf("read CONNECT response: %v", err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT response status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	var serverStream *smux.Stream
+	select {
+	case serverStream = <-accepted:
+	case err := <-acceptErr:
+		t.Fatalf("accept smux stream: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CONNECT smux stream")
+	}
+	if err := serverStream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set server stream deadline: %v", err)
+	}
+	kind, strategy, target, err := readSmuxOpenHeader(serverStream)
+	if err != nil {
+		t.Fatalf("read CONNECT smux header: %v", err)
+	}
+	if kind != streamKindTCP || strategy != IPStrategyDefault || target != "example.com:443" {
+		t.Fatalf("CONNECT smux header = kind %d strategy %d target %q", kind, strategy, target)
+	}
+	got := make([]byte, len(early))
+	if _, err := io.ReadFull(serverStream, got); err != nil {
+		t.Fatalf("read buffered CONNECT bytes: %v", err)
+	}
+	if !bytes.Equal(got, early) {
+		t.Fatalf("buffered CONNECT bytes = %q, want %q", got, early)
+	}
+
+	proxyClient.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for CONNECT handler shutdown")
+	}
+}
+
 func TestSmuxOpenHeaderRoundTrip(t *testing.T) {
 	var buf bytes.Buffer
 	if err := writeSmuxOpenHeader(&buf, streamKindTCP, IPStrategyPv4Pv6, "example.com:443"); err != nil {
@@ -3212,6 +3313,52 @@ func TestUDPAssociationHandleUDPResponseRejectsInvalidPort(t *testing.T) {
 	}
 	if netErr, ok := err.(net.Error); !ok || !netErr.Timeout() {
 		t.Fatalf("read UDP response error = %v, want timeout", err)
+	}
+}
+
+func TestUDPAssociationSendWritesBoundTarget(t *testing.T) {
+	clientStream, serverStream := openRawAcceptedSmuxTestStream(t)
+	assoc := &UDPAssociation{
+		id:        1,
+		receiving: true,
+		target:    "127.0.0.1:53",
+		stream:    clientStream,
+	}
+	payload := []byte("dns-query")
+
+	assoc.send("127.0.0.1:53", payload)
+
+	if err := serverStream.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set server stream deadline: %v", err)
+	}
+	got, err := readChunk(serverStream)
+	if err != nil {
+		t.Fatalf("read UDP stream chunk: %v", err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("UDP stream chunk = %q, want %q", got, payload)
+	}
+}
+
+func TestUDPAssociationSendDropsChangedTarget(t *testing.T) {
+	clientStream, serverStream := openRawAcceptedSmuxTestStream(t)
+	assoc := &UDPAssociation{
+		id:        2,
+		receiving: true,
+		target:    "127.0.0.1:53",
+		stream:    clientStream,
+	}
+
+	assoc.send("127.0.0.1:54", []byte("leak"))
+
+	if assoc.target != "127.0.0.1:53" {
+		t.Fatalf("association target = %q, want original target", assoc.target)
+	}
+	if err := serverStream.SetReadDeadline(time.Now().Add(100 * time.Millisecond)); err != nil {
+		t.Fatalf("set server stream deadline: %v", err)
+	}
+	if got, err := readChunk(serverStream); err == nil {
+		t.Fatalf("changed target wrote UDP stream chunk %q", got)
 	}
 }
 

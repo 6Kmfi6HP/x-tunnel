@@ -3759,9 +3759,8 @@ func (a *UDPAssociation) send(target string, data []byte) {
 		}()
 	} else {
 		if target != "" && target != a.target {
-			a.mu.Lock()
-			a.target = target
-			a.mu.Unlock()
+			log.Printf("[客户端] udp_assoc=%d 丢弃不同目标 %s，已绑定目标 %s", a.id, target, a.target)
+			return
 		}
 	}
 	if stream == nil {
@@ -3977,6 +3976,10 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 			_ = stream.Close()
 			return
 		}
+		if err := forwardBufferedHTTPBytes(br, stream); err != nil {
+			_ = stream.Close()
+			return
+		}
 	}
 	if len(first) > 0 {
 		if _, err := stream.Write(first); err != nil {
@@ -3987,6 +3990,18 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	logClientConnEvent(c, "HTTP", target, decision, true)
 	defer logClientConnEvent(c, "HTTP", target, decision, false)
 	proxyConnStream(c, stream)
+}
+
+func forwardBufferedHTTPBytes(br *bufio.Reader, stream io.Writer) error {
+	buffered := br.Buffered()
+	if buffered == 0 {
+		return nil
+	}
+	data := make([]byte, buffered)
+	if _, err := io.ReadFull(br, data); err != nil {
+		return err
+	}
+	return writeAll(stream, data)
 }
 
 func httpProxyTarget(req *http.Request) (string, error) {
