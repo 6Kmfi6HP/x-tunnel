@@ -1583,7 +1583,7 @@ func socks5Connect(conn net.Conn, addr string) error {
 // ======================== UDP Relayer (服务端用) ========================
 
 type UDPRelayer interface {
-	Read(buffer []byte) (int, *net.UDPAddr, error)
+	Read(buffer []byte) (int, string, error)
 	Write(data []byte) (int, error)
 	SetReadDeadline(t time.Time) error
 	Close() error
@@ -1594,8 +1594,12 @@ type DirectUDPRelayer struct {
 	target *net.UDPAddr
 }
 
-func (d *DirectUDPRelayer) Read(buffer []byte) (int, *net.UDPAddr, error) {
-	return d.conn.ReadFromUDP(buffer)
+func (d *DirectUDPRelayer) Read(buffer []byte) (int, string, error) {
+	n, addr, err := d.conn.ReadFromUDP(buffer)
+	if addr == nil {
+		return n, "", err
+	}
+	return n, addr.String(), err
 }
 func (d *DirectUDPRelayer) Write(data []byte) (int, error)    { return d.conn.WriteToUDP(data, d.target) }
 func (d *DirectUDPRelayer) SetReadDeadline(t time.Time) error { return d.conn.SetReadDeadline(t) }
@@ -1723,12 +1727,12 @@ func (r *SOCKS5UDPRelay) Write(data []byte) (int, error) {
 	return r.udpConn.WriteToUDP(pkt, r.relayAddr)
 }
 
-func (r *SOCKS5UDPRelay) Read(buffer []byte) (int, *net.UDPAddr, error) {
+func (r *SOCKS5UDPRelay) Read(buffer []byte) (int, string, error) {
 	if r == nil || r.udpConn == nil {
-		return 0, nil, errors.New("SOCKS5 UDP relay 未初始化")
+		return 0, "", errors.New("SOCKS5 UDP relay 未初始化")
 	}
 	if r.closed {
-		return 0, nil, errors.New("closed")
+		return 0, "", errors.New("closed")
 	}
 	tmpPtr := bufPool.Get().(*[]byte)
 	tmp := *tmpPtr
@@ -1736,11 +1740,11 @@ func (r *SOCKS5UDPRelay) Read(buffer []byte) (int, *net.UDPAddr, error) {
 
 	n, _, err := r.udpConn.ReadFromUDP(tmp)
 	if err != nil {
-		return 0, nil, err
+		return 0, "", err
 	}
 	srcAddr, payload, err := parseSOCKS5UDPResp(tmp[:n])
 	if err != nil {
-		return 0, nil, err
+		return 0, "", err
 	}
 	copy(buffer, payload)
 	return len(payload), srcAddr, nil
@@ -1784,12 +1788,12 @@ func buildSOCKS5UDPPacketData(target *net.UDPAddr, data []byte) []byte {
 	return packet
 }
 
-func parseSOCKS5UDPResp(packet []byte) (*net.UDPAddr, []byte, error) {
-	if len(packet) < 10 {
-		return nil, nil, fmt.Errorf("数据包过短")
+func parseSOCKS5UDPResp(packet []byte) (string, []byte, error) {
+	if len(packet) < 4 {
+		return "", nil, fmt.Errorf("数据包过短")
 	}
 	if packet[0] != 0 || packet[1] != 0 || packet[2] != 0 {
-		return nil, nil, fmt.Errorf("RSV/FRAG 字段必须为 0")
+		return "", nil, fmt.Errorf("RSV/FRAG 字段必须为 0")
 	}
 	atyp := packet[3]
 	offset := 4
@@ -1797,46 +1801,42 @@ func parseSOCKS5UDPResp(packet []byte) (*net.UDPAddr, []byte, error) {
 	switch atyp {
 	case 0x01:
 		if offset+4 > len(packet) {
-			return nil, nil, fmt.Errorf("IPv4地址长度过短")
+			return "", nil, fmt.Errorf("IPv4地址长度过短")
 		}
 		host = net.IP(packet[offset : offset+4]).String()
 		offset += 4
 	case 0x03:
 		if offset+1 > len(packet) {
-			return nil, nil, fmt.Errorf("域名长度字段过短")
+			return "", nil, fmt.Errorf("域名长度字段过短")
 		}
 		l := int(packet[offset])
 		if l == 0 {
-			return nil, nil, fmt.Errorf("域名不能为空")
+			return "", nil, fmt.Errorf("域名不能为空")
 		}
 		offset++
 		if offset+l > len(packet) {
-			return nil, nil, fmt.Errorf("域名长度不足")
+			return "", nil, fmt.Errorf("域名长度不足")
 		}
 		host = string(packet[offset : offset+l])
 		offset += l
 	case 0x04:
 		if offset+16 > len(packet) {
-			return nil, nil, fmt.Errorf("IPv6地址长度过短")
+			return "", nil, fmt.Errorf("IPv6地址长度过短")
 		}
 		host = net.IP(packet[offset : offset+16]).String()
 		offset += 16
 	default:
-		return nil, nil, fmt.Errorf("地址类型无效: %d", atyp)
+		return "", nil, fmt.Errorf("地址类型无效: %d", atyp)
 	}
 	if offset+2 > len(packet) {
-		return nil, nil, fmt.Errorf("端口字段过短")
+		return "", nil, fmt.Errorf("端口字段过短")
 	}
 	port := int(packet[offset])<<8 | int(packet[offset+1])
 	if port == 0 {
-		return nil, nil, fmt.Errorf("端口必须在 1-65535 之间")
+		return "", nil, fmt.Errorf("端口必须在 1-65535 之间")
 	}
 	offset += 2
-	addr, _ := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", host, port))
-	if addr == nil {
-		return nil, nil, fmt.Errorf("解析地址失败")
-	}
-	return addr, packet[offset:], nil
+	return net.JoinHostPort(host, strconv.Itoa(port)), packet[offset:], nil
 }
 
 // ======================== ECH 相关（客户端） ========================
@@ -2858,7 +2858,7 @@ func handleSmuxStream(session *ClientSession, ch *WSChannel, stream *smux.Stream
 				log.Printf("[服务端] 客户ID:%s UDP 读取失败: %s, err=%v, 通道:%d", shortID(session.clientID), target, e, ch.id)
 				return
 			}
-			if err := writeUDPReply(stream, addr.String(), buf[:n]); err != nil {
+			if err := writeUDPReply(stream, addr, buf[:n]); err != nil {
 				log.Printf("[服务端] 客户ID:%s UDP 响应写入失败: %s, err=%v, 通道:%d", shortID(session.clientID), target, err, ch.id)
 				return
 			}
@@ -3768,7 +3768,7 @@ func (a *UDPAssociation) Close() {
 }
 
 func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
-	if len(b) < 10 || b[0] != 0 || b[1] != 0 || b[2] != 0 {
+	if len(b) < 4 || b[0] != 0 || b[1] != 0 || b[2] != 0 {
 		return "", nil, errors.New("数据不合法")
 	}
 	off := 4

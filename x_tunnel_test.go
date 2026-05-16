@@ -2563,8 +2563,8 @@ func FuzzParseSOCKS5UDPResp(f *testing.F) {
 		if err != nil {
 			return
 		}
-		if addr == nil {
-			t.Fatal("parseSOCKS5UDPResp returned nil addr")
+		if addr == "" {
+			t.Fatal("parseSOCKS5UDPResp returned empty addr")
 		}
 		if len(payload) > len(raw) {
 			t.Fatalf("parseSOCKS5UDPResp payload length %d exceeds raw length %d", len(payload), len(raw))
@@ -2659,6 +2659,20 @@ func TestSOCKS5UDPPacketRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSOCKS5UDPPacketAcceptsShortDomainWithoutPayload(t *testing.T) {
+	packet, err := buildSOCKS5UDPPacket("a", 53, nil)
+	if err != nil {
+		t.Fatalf("buildSOCKS5UDPPacket returned error: %v", err)
+	}
+	target, payload, err := parseSOCKS5UDPPacket(packet)
+	if err != nil {
+		t.Fatalf("parseSOCKS5UDPPacket returned error: %v", err)
+	}
+	if target != "a:53" || len(payload) != 0 {
+		t.Fatalf("parseSOCKS5UDPPacket = target %q payload %q, want a:53 empty payload", target, payload)
+	}
+}
+
 func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2681,6 +2695,34 @@ func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 				t.Fatalf("parseSOCKS5UDPPacket accepted malformed packet %v", tt.raw)
 			}
 		})
+	}
+}
+
+func TestSOCKS5UDPRespParsesIPv6Address(t *testing.T) {
+	packet, err := buildSOCKS5UDPPacket("2001:db8::1", 853, []byte("dns"))
+	if err != nil {
+		t.Fatalf("buildSOCKS5UDPPacket returned error: %v", err)
+	}
+	addr, payload, err := parseSOCKS5UDPResp(packet)
+	if err != nil {
+		t.Fatalf("parseSOCKS5UDPResp returned error: %v", err)
+	}
+	if addr != "[2001:db8::1]:853" || !bytes.Equal(payload, []byte("dns")) {
+		t.Fatalf("parseSOCKS5UDPResp = addr %q payload %q, want [2001:db8::1]:853 dns", addr, payload)
+	}
+}
+
+func TestSOCKS5UDPRespAcceptsShortDomainWithoutPayload(t *testing.T) {
+	packet, err := buildSOCKS5UDPPacket("a", 53, nil)
+	if err != nil {
+		t.Fatalf("buildSOCKS5UDPPacket returned error: %v", err)
+	}
+	addr, payload, err := parseSOCKS5UDPResp(packet)
+	if err != nil {
+		t.Fatalf("parseSOCKS5UDPResp returned error: %v", err)
+	}
+	if addr != "a:53" || len(payload) != 0 {
+		t.Fatalf("parseSOCKS5UDPResp = addr %q payload %q, want a:53 empty payload", addr, payload)
 	}
 }
 

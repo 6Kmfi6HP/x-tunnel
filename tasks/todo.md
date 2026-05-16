@@ -998,3 +998,18 @@ Verification:
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 46.4% of statements`.
 - `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 SOCKS5 UDP short domain and IPv6 response parsing:
+
+- [x] Accept valid SOCKS5 UDP packets with one-byte domains and no payload.
+- [x] Parse IPv6 SOCKS5 UDP responses using bracketed host:port formatting.
+- [x] Preserve malformed packet rejection for short headers, empty domains, missing ports, and zero ports.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'TestSOCKS5UDP(Resp|Packet)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 46.6% of statements`.
+- `go test -race -count=1 ./...`: pass.
