@@ -726,6 +726,20 @@ func TestValidateToken(t *testing.T) {
 	}
 }
 
+func TestValidateHostPortRejectsWhitespace(t *testing.T) {
+	if err := validateListenHostPort(":8080"); err != nil {
+		t.Fatalf("validateListenHostPort accepted empty listen host before: %v", err)
+	}
+	for _, value := range []string{"bad host:80", "example.com:80\t", "example.com:\n80"} {
+		if err := validateHostPort(value); err == nil {
+			t.Fatalf("validateHostPort(%q) accepted whitespace", value)
+		}
+		if err := validateListenHostPort(value); err == nil {
+			t.Fatalf("validateListenHostPort(%q) accepted whitespace", value)
+		}
+	}
+}
+
 func TestValidateListenRule(t *testing.T) {
 	longCredential := strings.Repeat("u", 256)
 	valid := []string{
@@ -754,6 +768,7 @@ func TestValidateListenRule(t *testing.T) {
 		"socks5://" + longCredential + ":pass@127.0.0.1:11080",
 		"http://user:@127.0.0.1:18080",
 		"http://:pass@127.0.0.1:18080",
+		"http://bad host:18080",
 		"tcp://127.0.0.1:12000",
 		"tcp://127.0.0.1:12000/",
 	}
@@ -1836,7 +1851,7 @@ func TestValidateSmuxStreamTarget(t *testing.T) {
 		}
 	}
 
-	for _, target := range []string{"", "example.com", "example.com:0", "example.com:bad", ":443"} {
+	for _, target := range []string{"", "example.com", "example.com:0", "example.com:bad", ":443", "bad host:443"} {
 		if err := validateSmuxStreamTarget(target); err == nil {
 			t.Fatalf("validateSmuxStreamTarget(%q) accepted malformed target", target)
 		}

@@ -983,3 +983,18 @@ Verification:
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 46.3% of statements`.
 - `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 host:port whitespace validation:
+
+- [x] Reject host:port values containing spaces, tabs, or line breaks.
+- [x] Preserve empty-host listen addresses such as `:8080`.
+- [x] Add focused coverage for direct host:port, listen rules, and smux targets.
+- [x] Run focused/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(ValidateHostPortRejectsWhitespace|ValidateListenRule|ValidateSmuxStreamTarget)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 46.4% of statements`.
+- `go test -race -count=1 ./...`: pass.

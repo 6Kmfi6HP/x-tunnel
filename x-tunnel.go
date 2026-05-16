@@ -619,6 +619,9 @@ func validateListenHostPort(value string) error {
 }
 
 func validateHostPortValue(value string, allowEmptyHost bool) error {
+	if strings.ContainsAny(value, " \t\r\n") {
+		return fmt.Errorf("host:port 不能包含空白字符")
+	}
 	host, port, err := net.SplitHostPort(value)
 	if err != nil {
 		return err
