@@ -1042,3 +1042,17 @@ Verification:
 - `go test -count=1 ./...`: pass.
 - `go test -cover -count=1 ./...`: pass, `coverage: 46.7% of statements`.
 - `go test -race -count=1 ./...`: pass.
+
+Post Phase 8 integration metrics assertion precision:
+
+- [x] Replace substring-based metric value assertions with exact metric-name/value matching.
+- [x] Keep broad metrics presence checks unchanged.
+- [x] Update integration assertions for protocol, auth, source, client limit, and target rejection counters.
+- [x] Run focused integration/full/coverage verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(LocalTunnelIntegration|IntegrationMaxClientsRejectsNewClient|IntegrationSourceCIDRRejectionMetrics|IntegrationTCPStatusRejectsBlockedTarget)$' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 46.7% of statements`.

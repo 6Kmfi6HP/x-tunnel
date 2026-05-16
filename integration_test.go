@@ -101,10 +101,10 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	assertBody(t, "socks5 udp", string(fetchUDPViaSOCKS5(t, socksAddr, udpTargetAddr, []byte("ping"))), "echo:ping")
 	serverMetrics := fetchHTTP(t, "http://"+metricsAddr+"/metrics")
 	assertMetrics(t, serverMetrics)
-	assertMetricsContains(t, serverMetrics, "x_tunnel_server_protocol_negotiations_total 1")
+	assertMetricValue(t, serverMetrics, "x_tunnel_server_protocol_negotiations_total", "1")
 	clientMetrics := fetchHTTP(t, "http://"+clientMetricsAddr+"/metrics")
 	assertMetrics(t, clientMetrics)
-	assertMetricsContains(t, clientMetrics, "x_tunnel_client_protocol_negotiations_total 1")
+	assertMetricValue(t, clientMetrics, "x_tunnel_client_protocol_negotiations_total", "1")
 
 	badClient := startXTunnel(t, ctx, binPath, badClientLog,
 		"-l", "socks5://"+freeTCPAddr(t),
@@ -115,7 +115,7 @@ func TestLocalTunnelIntegration(t *testing.T) {
 	defer stopProcess(badClient)
 	waitLogContains(t, ctx, badClientLog, "认证失败")
 	waitLogContains(t, ctx, serverLog, "Token 认证失败")
-	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_auth_rejections_total 1")
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_auth_rejections_total", "1")
 }
 
 func TestIntegrationLocalProxyAuth(t *testing.T) {
@@ -447,7 +447,7 @@ func TestIntegrationMaxClientsRejectsNewClient(t *testing.T) {
 	waitTCP(t, ctx, secondSocksAddr)
 	waitLogContains(t, ctx, serverLog, "拒绝客户端会话")
 	waitLogContains(t, ctx, secondClientLog, "协议协商失败")
-	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_client_session_rejections_total 1")
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_client_session_rejections_total", "1")
 }
 
 func TestIntegrationSourceCIDRRejectionMetrics(t *testing.T) {
@@ -481,7 +481,7 @@ func TestIntegrationSourceCIDRRejectionMetrics(t *testing.T) {
 	if got := fetchHTTPStatus(t, "http://"+wsAddr+"/tunnel"); got != http.StatusForbidden {
 		t.Fatalf("source CIDR rejection status = %d, want %d", got, http.StatusForbidden)
 	}
-	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_source_rejections_total 1")
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_source_rejections_total", "1")
 }
 
 func TestIntegrationStartupValidationFailures(t *testing.T) {
@@ -586,12 +586,12 @@ func TestIntegrationTCPStatusRejectsBlockedTarget(t *testing.T) {
 	if got := socks5ConnectReplyCode(t, socksAddr, "127.0.0.1:1"); got == 0x00 {
 		t.Fatal("SOCKS5 connect unexpectedly succeeded for blocked target")
 	}
-	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total 1")
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total", "1")
 	if got := fetchViaHTTPProxyStatus(t, httpProxyAddr, "http://127.0.0.1:1/blocked"); got != http.StatusBadGateway {
 		t.Fatalf("HTTP proxy blocked target status = %d, want %d", got, http.StatusBadGateway)
 	}
 	waitLogContains(t, ctx, serverLog, "TCP 拒绝")
-	assertMetricsContains(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total 2")
+	assertMetricValue(t, fetchHTTP(t, "http://"+metricsAddr+"/metrics"), "x_tunnel_server_target_rejections_total", "2")
 }
 
 func startXTunnel(t *testing.T, ctx context.Context, binPath, logPath string, args ...string) *exec.Cmd {
@@ -1389,11 +1389,18 @@ func assertMetrics(t *testing.T, got string) {
 	}
 }
 
-func assertMetricsContains(t *testing.T, got, want string) {
+func assertMetricValue(t *testing.T, got, name, want string) {
 	t.Helper()
-	if !strings.Contains(got, want) {
-		t.Fatalf("metrics missing %q:\n%s", want, got)
+	for _, line := range strings.Split(got, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[0] == name {
+			if fields[1] != want {
+				t.Fatalf("metric %s = %s, want %s:\n%s", name, fields[1], want, got)
+			}
+			return
+		}
 	}
+	t.Fatalf("metrics missing value for %q:\n%s", name, got)
 }
 
 func writeClientMTLSFiles(t *testing.T) (string, string, string) {
