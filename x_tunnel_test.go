@@ -4628,6 +4628,7 @@ func TestSOCKS5UDPPacketMalformed(t *testing.T) {
 		{name: "fragmented", raw: []byte{0, 0, 1, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
 		{name: "empty domain", raw: []byte{0, 0, 0, 3, 0, 0, 53}},
+		{name: "invalid domain", raw: append([]byte{0, 0, 0, 3, 16}, append([]byte("bad_host.example"), 0, 53)...)},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
 		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
@@ -4681,6 +4682,7 @@ func TestSOCKS5UDPRespMalformed(t *testing.T) {
 		{name: "fragmented", raw: []byte{0, 0, 1, 1, 1, 2, 3, 4, 0, 53}},
 		{name: "unknown atyp", raw: []byte{0, 0, 0, 9, 0, 53}},
 		{name: "empty domain", raw: []byte{0, 0, 0, 3, 0, 0, 53}},
+		{name: "invalid domain", raw: append([]byte{0, 0, 0, 3, 16}, append([]byte("bad_host.example"), 0, 53)...)},
 		{name: "truncated domain", raw: []byte{0, 0, 0, 3, 5, 'a'}},
 		{name: "truncated port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0}},
 		{name: "zero port", raw: []byte{0, 0, 0, 1, 1, 2, 3, 4, 0, 0}},
@@ -4712,6 +4714,88 @@ func TestResolveUDPWithStrategyRejectsInvalidPort(t *testing.T) {
 				t.Fatalf("resolveUDPWithStrategy(%q, %d) accepted invalid port", tt.addr, tt.strategy)
 			}
 		})
+	}
+}
+
+func TestResolveUDPWithStrategyLiteralIPs(t *testing.T) {
+	tests := []struct {
+		name     string
+		addr     string
+		strategy byte
+		wantIP   net.IP
+		wantPort int
+	}{
+		{name: "ipv4 ignores ipv6 only strategy", addr: "127.0.0.1:53", strategy: IPStrategyIPv6Only, wantIP: net.IPv4(127, 0, 0, 1), wantPort: 53},
+		{name: "ipv6 ignores ipv4 only strategy", addr: "[::1]:5353", strategy: IPStrategyIPv4Only, wantIP: net.ParseIP("::1"), wantPort: 5353},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := resolveUDPWithStrategy(tt.addr, tt.strategy)
+			if err != nil {
+				t.Fatalf("resolveUDPWithStrategy(%q, %d) returned error: %v", tt.addr, tt.strategy, err)
+			}
+			if !got.IP.Equal(tt.wantIP) || got.Port != tt.wantPort {
+				t.Fatalf("resolveUDPWithStrategy(%q, %d) = %s, want %s:%d", tt.addr, tt.strategy, got, tt.wantIP, tt.wantPort)
+			}
+		})
+	}
+}
+
+func TestResolveUDPWithStrategyLocalhostFamilies(t *testing.T) {
+	oldCfg := cfg
+	defer func() {
+		cfg = oldCfg
+	}()
+	cfg.DialTimeout = time.Second
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIPAddr(ctx, "localhost")
+	if err != nil {
+		t.Skipf("localhost resolution unavailable: %v", err)
+	}
+	hasV4, hasV6 := false, false
+	for _, ip := range ips {
+		if ip.IP.To4() != nil {
+			hasV4 = true
+		} else if ip.IP.To16() != nil {
+			hasV6 = true
+		}
+	}
+
+	if hasV4 {
+		got, err := resolveUDPWithStrategy("localhost:53", IPStrategyIPv4Only)
+		if err != nil {
+			t.Fatalf("resolveUDPWithStrategy IPv4-only localhost returned error: %v", err)
+		}
+		if got.IP.To4() == nil {
+			t.Fatalf("IPv4-only localhost resolved to %s, want IPv4", got)
+		}
+	}
+	if hasV6 {
+		got, err := resolveUDPWithStrategy("localhost:53", IPStrategyIPv6Only)
+		if err != nil {
+			t.Fatalf("resolveUDPWithStrategy IPv6-only localhost returned error: %v", err)
+		}
+		if got.IP.To4() != nil {
+			t.Fatalf("IPv6-only localhost resolved to %s, want IPv6", got)
+		}
+	}
+	if hasV4 && hasV6 {
+		got, err := resolveUDPWithStrategy("localhost:53", IPStrategyPv4Pv6)
+		if err != nil {
+			t.Fatalf("resolveUDPWithStrategy IPv4-preferred localhost returned error: %v", err)
+		}
+		if got.IP.To4() == nil {
+			t.Fatalf("IPv4-preferred localhost resolved to %s, want IPv4", got)
+		}
+		got, err = resolveUDPWithStrategy("localhost:53", IPStrategyPv6Pv4)
+		if err != nil {
+			t.Fatalf("resolveUDPWithStrategy IPv6-preferred localhost returned error: %v", err)
+		}
+		if got.IP.To4() != nil {
+			t.Fatalf("IPv6-preferred localhost resolved to %s, want IPv6", got)
+		}
 	}
 }
 
@@ -4808,6 +4892,14 @@ func TestBuildSOCKS5UDPPacketRejectsOversizedDomain(t *testing.T) {
 func TestBuildSOCKS5UDPPacketRejectsEmptyHost(t *testing.T) {
 	if _, err := buildSOCKS5UDPPacket("", 53, nil); err == nil {
 		t.Fatal("buildSOCKS5UDPPacket accepted empty host")
+	}
+}
+
+func TestBuildSOCKS5UDPPacketRejectsInvalidDomain(t *testing.T) {
+	for _, host := range []string{"bad_host.example", "-bad.example", "bad-.example", "example..com"} {
+		if _, err := buildSOCKS5UDPPacket(host, 53, nil); err == nil {
+			t.Fatalf("buildSOCKS5UDPPacket accepted invalid domain %q", host)
+		}
 	}
 }
 

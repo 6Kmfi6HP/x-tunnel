@@ -1916,7 +1916,11 @@ func parseSOCKS5UDPResp(packet []byte) (string, []byte, error) {
 		return "", nil, fmt.Errorf("端口必须在 1-65535 之间")
 	}
 	offset += 2
-	return net.JoinHostPort(host, strconv.Itoa(port)), packet[offset:], nil
+	addr := net.JoinHostPort(host, strconv.Itoa(port))
+	if err := validateHostPort(addr); err != nil {
+		return "", nil, err
+	}
+	return addr, packet[offset:], nil
 }
 
 // ======================== ECH 相关（客户端） ========================
@@ -4023,6 +4027,9 @@ func parseSOCKS5UDPPacket(b []byte) (string, []byte, error) {
 	if b[3] == 0x04 {
 		t = fmt.Sprintf("[%s]:%d", h, p)
 	}
+	if err := validateHostPort(t); err != nil {
+		return "", nil, err
+	}
 	return t, b[off:], nil
 }
 
@@ -4044,6 +4051,9 @@ func buildSOCKS5UDPPacket(h string, p int, d []byte) ([]byte, error) {
 		}
 		if len(h) > 255 {
 			return nil, fmt.Errorf("域名过长")
+		}
+		if err := validateHostnameOrIP(h); err != nil {
+			return nil, err
 		}
 		buf = append(buf, 0x03, byte(len(h)))
 		buf = append(buf, h...)

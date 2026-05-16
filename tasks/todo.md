@@ -1711,6 +1711,26 @@ Review:
 - `SOCKS5UDPRelay.Read` now snapshots `closed` under the relay mutex, matching `Write` and `Close`.
 - The close/unblock regression covers pending UDP reads during relay shutdown.
 
+Post Phase 8 SOCKS5 UDP hostname strictness:
+
+- [x] Reject invalid DNS hostname fields while parsing SOCKS5 UDP request and response packets.
+- [x] Reject invalid non-IP hostnames when building SOCKS5 UDP packets.
+- [x] Add focused malformed packet and builder coverage.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(SOCKS5UDPPacketMalformed|SOCKS5UDPRespMalformed|BuildSOCKS5UDPPacketRejectsInvalidDomain|ResolveUDPWithStrategy)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 61.3% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- SOCKS5 UDP request and response packet parsing now rejects invalid DNS hostname fields after packet decoding.
+- SOCKS5 UDP packet building now rejects invalid non-IP hostnames before emitting a domain-form packet.
+
 Post Phase 8 hostname trailing-dot compatibility:
 
 - [x] Preserve valid trailing-dot DNS hostnames while rejecting malformed hostnames.
@@ -1727,3 +1747,17 @@ Verification:
 Review:
 
 - Hostname validation now trims one trailing root dot before validating labels, matching the existing target-policy normalization behavior.
+
+Post Phase 8 UDP resolve strategy coverage:
+
+- [x] Cover literal IPv4/IPv6 UDP targets resolving without DNS regardless of strategy.
+- [x] Cover localhost IPv4-only, IPv6-only, and preferred-family resolution when the address family exists locally.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- Covered by the focused/full/coverage/race verification in the SOCKS5 UDP hostname strictness batch.
+
+Review:
+
+- UDP resolution now has regression coverage for literal IP targets bypassing DNS and for localhost family-selection strategies where the local resolver exposes those address families.
