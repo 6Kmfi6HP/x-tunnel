@@ -1619,3 +1619,37 @@ Verification:
 Review:
 
 - `ensureTargetAllowed` now has direct coverage for nil policy, allowed CIDR target, outside-allow CIDR rejection, and denied host rejection.
+
+Post Phase 8 UDP relayer method coverage:
+
+- [x] Add loopback coverage for `DirectUDPRelayer` read/write/deadline/close behavior.
+- [x] Add loopback coverage for `SOCKS5UDPRelay` packet-wrapped read/write behavior and idempotent close.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(DirectUDPRelayerRoundTrip|SOCKS5UDPRelayRoundTripAndClose|HandleHTTPPostOpensStreamBeforeBodyComplete|HandleHTTPConnectForwardsBufferedClientBytes)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 59.2% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- Direct UDP relay and SOCKS5 UDP relay methods now have loopback coverage for datagram wrapping, reads, writes, deadlines, and close behavior.
+
+Post Phase 8 HTTP proxy request body streaming:
+
+- [x] Forward ordinary HTTP proxy requests directly to the smux stream instead of buffering the full request in memory.
+- [x] Preserve forwarded request headers, `Via`, body framing, and CONNECT behavior.
+- [x] Add a focused test proving the smux stream opens before a POST body is fully sent.
+- [x] Run full/coverage/race verification and commit.
+
+Verification:
+
+- Covered by the focused/full/coverage/race verification in the UDP relayer method coverage batch.
+
+Review:
+
+- Ordinary HTTP proxy requests now open the smux stream before waiting for the full request body, then stream `Request.Write` directly to the tunnel.
+- The focused POST test proves forwarded headers reach the smux stream before the delayed body is sent, while existing CONNECT buffered-byte coverage remains intact.

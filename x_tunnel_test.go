@@ -1874,6 +1874,124 @@ func TestNewSOCKS5UDPRelayAcceptsIPv6AssociateRelay(t *testing.T) {
 	}
 }
 
+func TestDirectUDPRelayerRoundTrip(t *testing.T) {
+	targetConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen target UDP: %v", err)
+	}
+	defer targetConn.Close()
+	localConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen local UDP: %v", err)
+	}
+
+	relay := &DirectUDPRelayer{
+		conn:   localConn,
+		target: targetConn.LocalAddr().(*net.UDPAddr),
+	}
+
+	if n, err := relay.Write([]byte("ping")); err != nil || n != len("ping") {
+		t.Fatalf("DirectUDPRelayer.Write = n %d err %v, want n %d nil", n, err, len("ping"))
+	}
+
+	buf := make([]byte, 64)
+	if err := targetConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set target read deadline: %v", err)
+	}
+	n, clientAddr, err := targetConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("target read: %v", err)
+	}
+	if string(buf[:n]) != "ping" {
+		t.Fatalf("target payload = %q, want ping", buf[:n])
+	}
+	if _, err := targetConn.WriteToUDP([]byte("pong"), clientAddr); err != nil {
+		t.Fatalf("target write response: %v", err)
+	}
+	if err := relay.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("DirectUDPRelayer.SetReadDeadline returned error: %v", err)
+	}
+	n, src, err := relay.Read(buf)
+	if err != nil {
+		t.Fatalf("DirectUDPRelayer.Read returned error: %v", err)
+	}
+	if src != targetConn.LocalAddr().String() || string(buf[:n]) != "pong" {
+		t.Fatalf("DirectUDPRelayer.Read = src %q payload %q, want src %q payload pong", src, buf[:n], targetConn.LocalAddr().String())
+	}
+	if err := relay.Close(); err != nil {
+		t.Fatalf("DirectUDPRelayer.Close returned error: %v", err)
+	}
+}
+
+func TestSOCKS5UDPRelayRoundTripAndClose(t *testing.T) {
+	relayConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen SOCKS5 relay UDP: %v", err)
+	}
+	defer relayConn.Close()
+	localConn, err := net.ListenUDP("udp", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatalf("listen local UDP: %v", err)
+	}
+	tcpServer, tcpClient := net.Pipe()
+	defer tcpClient.Close()
+
+	targetAddr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 5353}
+	relay := &SOCKS5UDPRelay{
+		tcpConn:    tcpServer,
+		udpConn:    localConn,
+		relayAddr:  relayConn.LocalAddr().(*net.UDPAddr),
+		targetAddr: targetAddr,
+	}
+
+	if n, err := relay.Write([]byte("query")); err != nil || n <= len("query") {
+		t.Fatalf("SOCKS5UDPRelay.Write = n %d err %v, want wrapped datagram write", n, err)
+	}
+	buf := make([]byte, 128)
+	if err := relayConn.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set relay read deadline: %v", err)
+	}
+	n, _, err := relayConn.ReadFromUDP(buf)
+	if err != nil {
+		t.Fatalf("relay UDP read: %v", err)
+	}
+	target, payload, err := parseSOCKS5UDPPacket(buf[:n])
+	if err != nil {
+		t.Fatalf("parse SOCKS5 UDP relay write: %v", err)
+	}
+	if target != targetAddr.String() || string(payload) != "query" {
+		t.Fatalf("SOCKS5UDPRelay.Write packet = target %q payload %q, want target %q payload query", target, payload, targetAddr.String())
+	}
+
+	response, err := buildSOCKS5UDPPacket("8.8.8.8", 53, []byte("response"))
+	if err != nil {
+		t.Fatalf("build SOCKS5 UDP response: %v", err)
+	}
+	if _, err := relayConn.WriteToUDP(response, localConn.LocalAddr().(*net.UDPAddr)); err != nil {
+		t.Fatalf("write SOCKS5 UDP response: %v", err)
+	}
+	if err := relay.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("SOCKS5UDPRelay.SetReadDeadline returned error: %v", err)
+	}
+	n, src, err := relay.Read(buf)
+	if err != nil {
+		t.Fatalf("SOCKS5UDPRelay.Read returned error: %v", err)
+	}
+	if src != "8.8.8.8:53" || string(buf[:n]) != "response" {
+		t.Fatalf("SOCKS5UDPRelay.Read = src %q payload %q, want src 8.8.8.8:53 payload response", src, buf[:n])
+	}
+
+	if err := relay.Close(); err != nil {
+		t.Fatalf("SOCKS5UDPRelay.Close returned error: %v", err)
+	}
+	if err := relay.Close(); err != nil {
+		t.Fatalf("SOCKS5UDPRelay.Close second call returned error: %v", err)
+	}
+	if _, err := relay.Write([]byte("again")); err == nil {
+		t.Fatal("SOCKS5UDPRelay.Write succeeded after Close")
+	}
+}
+
 func startSOCKS5UDPAssociateResponse(t *testing.T, response []byte) (string, func()) {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -2677,6 +2795,128 @@ func TestAddHTTPProxyViaHeader(t *testing.T) {
 	got := h.Values("Via")
 	if len(got) != 2 || got[0] != "1.0 upstream-proxy" || got[1] != httpProxyViaValue {
 		t.Fatalf("Via headers = %q, want existing value plus %q", got, httpProxyViaValue)
+	}
+}
+
+func TestHandleHTTPPostOpensStreamBeforeBodyComplete(t *testing.T) {
+	oldPool := echPool
+	oldCfg := cfg
+	oldIPStrategy := ipStrategy
+	defer func() {
+		echPool = oldPool
+		cfg = oldCfg
+		ipStrategy = oldIPStrategy
+	}()
+	cfg.DialTimeout = time.Second
+	ipStrategy = IPStrategyDefault
+
+	serverConn, clientConn := net.Pipe()
+	serverSession, err := smux.Server(serverConn, nil)
+	if err != nil {
+		t.Fatalf("smux server: %v", err)
+	}
+	clientSession, err := smux.Client(clientConn, nil)
+	if err != nil {
+		t.Fatalf("smux client: %v", err)
+	}
+	t.Cleanup(func() {
+		serverSession.Close()
+		clientSession.Close()
+		serverConn.Close()
+		clientConn.Close()
+	})
+	echPool = &ECHPool{
+		smuxConns:   []*smux.Session{clientSession},
+		channelRTT:  []int64{1},
+		channelCaps: []uint32{0},
+	}
+
+	accepted := make(chan *smux.Stream, 1)
+	acceptErr := make(chan error, 1)
+	go func() {
+		stream, err := serverSession.AcceptStream()
+		if err != nil {
+			acceptErr <- err
+			return
+		}
+		accepted <- stream
+	}()
+
+	proxyServer, proxyClient := net.Pipe()
+	_ = proxyServer.SetDeadline(time.Now().Add(time.Second))
+	_ = proxyClient.SetDeadline(time.Now().Add(time.Second))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handleHTTP(proxyServer, &ProxyConfig{})
+	}()
+
+	reqHead := "POST http://example.com/upload HTTP/1.1\r\nHost: example.com\r\nContent-Length: 4\r\n\r\n"
+	if err := writeAll(proxyClient, []byte(reqHead)); err != nil {
+		t.Fatalf("write HTTP proxy POST head: %v", err)
+	}
+
+	var serverStream *smux.Stream
+	select {
+	case serverStream = <-accepted:
+	case err := <-acceptErr:
+		t.Fatalf("accept smux stream: %v", err)
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for smux stream before POST body was complete")
+	}
+	if err := serverStream.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatalf("set server stream deadline: %v", err)
+	}
+	kind, strategy, target, err := readSmuxOpenHeader(serverStream)
+	if err != nil {
+		t.Fatalf("read POST smux header: %v", err)
+	}
+	if kind != streamKindTCP || strategy != IPStrategyDefault || target != "example.com:80" {
+		t.Fatalf("POST smux header = kind %d strategy %d target %q", kind, strategy, target)
+	}
+
+	br := bufio.NewReader(serverStream)
+	requestLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read forwarded request line: %v", err)
+	}
+	if requestLine != "POST /upload HTTP/1.1\r\n" {
+		t.Fatalf("forwarded request line = %q", requestLine)
+	}
+	var forwardedHeaders strings.Builder
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read forwarded request header: %v", err)
+		}
+		if line == "\r\n" {
+			break
+		}
+		forwardedHeaders.WriteString(line)
+	}
+	headers := forwardedHeaders.String()
+	for _, want := range []string{"Host: example.com\r\n", "Content-Length: 4\r\n", "Via: " + httpProxyViaValue + "\r\n"} {
+		if !strings.Contains(headers, want) {
+			t.Fatalf("forwarded headers missing %q:\n%s", want, headers)
+		}
+	}
+
+	if err := writeAll(proxyClient, []byte("body")); err != nil {
+		t.Fatalf("write delayed POST body: %v", err)
+	}
+	body := make([]byte, 4)
+	if _, err := io.ReadFull(br, body); err != nil {
+		t.Fatalf("read forwarded POST body: %v", err)
+	}
+	if string(body) != "body" {
+		t.Fatalf("forwarded POST body = %q, want body", body)
+	}
+	_ = serverStream.Close()
+	_ = proxyClient.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for HTTP handler shutdown")
 	}
 }
 

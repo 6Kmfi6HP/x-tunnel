@@ -4097,16 +4097,11 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 		return
 	}
 
-	var first []byte
-
 	if req.Method != "CONNECT" {
 		addHTTPProxyViaHeader(req.Header)
 		req.RequestURI = ""
 		req.URL.Scheme = ""
 		req.URL.Host = ""
-		var buf bytes.Buffer
-		_ = req.Write(&buf)
-		first = buf.Bytes()
 	}
 
 	stream, _, decision, err := echPool.openTCPStream(target)
@@ -4125,8 +4120,8 @@ func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 			return
 		}
 	}
-	if len(first) > 0 {
-		if err := writeAll(stream, first); err != nil {
+	if req.Method != "CONNECT" {
+		if err := req.Write(stream); err != nil {
 			_ = stream.Close()
 			return
 		}
