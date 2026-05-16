@@ -1845,3 +1845,24 @@ Review:
 
 - HTTP proxy auth failure now uses the conventional 407 reason phrase while preserving the required proxy-auth challenge header.
 - The response now advertises an explicit empty body, avoiding client ambiguity on failed proxy-auth attempts.
+
+Post Phase 8 TLS/mTLS helper coverage:
+
+- [x] Cover loading valid and invalid CA PEM pools from disk.
+- [x] Cover applying a configured client certificate to TLS client config.
+- [x] Cover server-side client CA configuration for mTLS.
+- [x] Cover standard and unified TLS config branches, including fallback and missing ECH state.
+- [x] Run focused/full/coverage/race verification and commit.
+
+Verification:
+
+- `git diff --check`: pass.
+- `go test -run 'Test(LoadCertPoolFromFile|ApplyClientCertificate|ConfigureServerClientAuth|BuildStandardTLSConfig|BuildUnifiedTLSConfigBranches|GenerateSelfSignedCert|ValidateMTLSConfig)' -count=1 ./...`: pass.
+- `go test -count=1 ./...`: pass.
+- `go test -cover -count=1 ./...`: pass, `coverage: 63.7% of statements`.
+- `go test -race -count=1 ./...`: pass.
+
+Review:
+
+- TLS helper tests now cover valid PEM CA loading, invalid PEM rejection, client certificate loading, server-side mTLS client CA configuration, and generated self-signed certificates.
+- Unified TLS config coverage now proves missing ECH fails closed, ECH config is propagated when present, and fallback preserves standard TLS behavior.

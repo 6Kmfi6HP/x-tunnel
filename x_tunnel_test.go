@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -745,6 +747,199 @@ func TestValidateMTLSConfig(t *testing.T) {
 	if err := validateMTLSConfig(false, ""); err == nil {
 		t.Fatal("validateMTLSConfig allowed client CA in client mode")
 	}
+}
+
+func TestLoadCertPoolFromFile(t *testing.T) {
+	caPath, _, _ := writeClientMTLSFiles(t)
+	pool, err := loadCertPoolFromFile(caPath)
+	if err != nil {
+		t.Fatalf("loadCertPoolFromFile returned error: %v", err)
+	}
+	if pool == nil || len(pool.Subjects()) == 0 {
+		t.Fatal("loadCertPoolFromFile returned an empty cert pool")
+	}
+
+	invalidPath := filepath.Join(t.TempDir(), "invalid-ca.pem")
+	if err := os.WriteFile(invalidPath, []byte("not a certificate"), 0600); err != nil {
+		t.Fatalf("write invalid CA file: %v", err)
+	}
+	if _, err := loadCertPoolFromFile(invalidPath); err == nil {
+		t.Fatal("loadCertPoolFromFile accepted invalid PEM")
+	}
+	if _, err := loadCertPoolFromFile(filepath.Join(t.TempDir(), "missing-ca.pem")); err == nil {
+		t.Fatal("loadCertPoolFromFile accepted missing file")
+	}
+}
+
+func TestApplyClientCertificate(t *testing.T) {
+	preserveTLSGlobals(t)
+
+	cfgTLS := &tls.Config{}
+	if err := applyClientCertificate(cfgTLS); err != nil {
+		t.Fatalf("applyClientCertificate no-op returned error: %v", err)
+	}
+	if len(cfgTLS.Certificates) != 0 {
+		t.Fatalf("client certificates after no-op = %d, want 0", len(cfgTLS.Certificates))
+	}
+
+	_, certPath, keyPath := writeClientMTLSFiles(t)
+	clientCertFile, clientKeyFile = certPath, ""
+	if err := applyClientCertificate(cfgTLS); err == nil {
+		t.Fatal("applyClientCertificate accepted incomplete cert/key pair")
+	}
+
+	clientCertFile, clientKeyFile = certPath, keyPath
+	if err := applyClientCertificate(cfgTLS); err != nil {
+		t.Fatalf("applyClientCertificate returned error: %v", err)
+	}
+	if len(cfgTLS.Certificates) != 1 {
+		t.Fatalf("client certificates = %d, want 1", len(cfgTLS.Certificates))
+	}
+	if len(cfgTLS.Certificates[0].Certificate) == 0 {
+		t.Fatal("loaded client certificate has no certificate chain")
+	}
+}
+
+func TestConfigureServerClientAuth(t *testing.T) {
+	preserveTLSGlobals(t)
+
+	cfgTLS := &tls.Config{}
+	clientCAFile = ""
+	if err := configureServerClientAuth(cfgTLS); err != nil {
+		t.Fatalf("configureServerClientAuth no-op returned error: %v", err)
+	}
+	if cfgTLS.ClientAuth != tls.NoClientCert || cfgTLS.ClientCAs != nil {
+		t.Fatalf("configureServerClientAuth no-op changed config: auth=%v CAs=%v", cfgTLS.ClientAuth, cfgTLS.ClientCAs)
+	}
+
+	caPath, _, _ := writeClientMTLSFiles(t)
+	clientCAFile = caPath
+	if err := configureServerClientAuth(cfgTLS); err != nil {
+		t.Fatalf("configureServerClientAuth returned error: %v", err)
+	}
+	if cfgTLS.ClientAuth != tls.RequireAndVerifyClientCert {
+		t.Fatalf("ClientAuth = %v, want RequireAndVerifyClientCert", cfgTLS.ClientAuth)
+	}
+	if cfgTLS.ClientCAs == nil || len(cfgTLS.ClientCAs.Subjects()) == 0 {
+		t.Fatal("configureServerClientAuth did not load client CAs")
+	}
+
+	clientCAFile = filepath.Join(t.TempDir(), "missing-ca.pem")
+	if err := configureServerClientAuth(&tls.Config{}); err == nil {
+		t.Fatal("configureServerClientAuth accepted missing CA file")
+	}
+}
+
+func TestBuildStandardTLSConfig(t *testing.T) {
+	preserveTLSGlobals(t)
+	_, certPath, keyPath := writeClientMTLSFiles(t)
+	clientCertFile, clientKeyFile = certPath, keyPath
+	insecure = true
+
+	cfgTLS, err := buildStandardTLSConfig("tls.example")
+	if err != nil {
+		t.Fatalf("buildStandardTLSConfig returned error: %v", err)
+	}
+	if cfgTLS.MinVersion != tls.VersionTLS13 {
+		t.Fatalf("MinVersion = %x, want TLS 1.3", cfgTLS.MinVersion)
+	}
+	if cfgTLS.ServerName != "tls.example" {
+		t.Fatalf("ServerName = %q, want tls.example", cfgTLS.ServerName)
+	}
+	if !cfgTLS.InsecureSkipVerify {
+		t.Fatal("buildStandardTLSConfig did not preserve insecure=true")
+	}
+	if cfgTLS.RootCAs == nil {
+		t.Fatal("buildStandardTLSConfig did not load system roots")
+	}
+	if len(cfgTLS.Certificates) != 1 {
+		t.Fatalf("client certificates = %d, want 1", len(cfgTLS.Certificates))
+	}
+}
+
+func TestBuildUnifiedTLSConfigBranches(t *testing.T) {
+	preserveTLSGlobals(t)
+	clientCertFile, clientKeyFile = "", ""
+	insecure = true
+	fallback = false
+	setTestECHList(nil)
+	if _, err := buildUnifiedTLSConfig("ech.example"); err == nil {
+		t.Fatal("buildUnifiedTLSConfig accepted missing ECH config")
+	}
+
+	setTestECHList([]byte{0x01, 0x02, 0x03})
+	cfgTLS, err := buildUnifiedTLSConfig("ech.example")
+	if err != nil {
+		t.Fatalf("buildUnifiedTLSConfig ECH branch returned error: %v", err)
+	}
+	if cfgTLS.ServerName != "ech.example" {
+		t.Fatalf("ECH ServerName = %q, want ech.example", cfgTLS.ServerName)
+	}
+	if !bytes.Equal(cfgTLS.EncryptedClientHelloConfigList, []byte{0x01, 0x02, 0x03}) {
+		t.Fatalf("ECH config list = %v, want [1 2 3]", cfgTLS.EncryptedClientHelloConfigList)
+	}
+	if !cfgTLS.InsecureSkipVerify {
+		t.Fatal("buildUnifiedTLSConfig did not preserve insecure=true on ECH branch")
+	}
+
+	fallback = true
+	setTestECHList(nil)
+	cfgTLS, err = buildUnifiedTLSConfig("fallback.example")
+	if err != nil {
+		t.Fatalf("buildUnifiedTLSConfig fallback branch returned error: %v", err)
+	}
+	if cfgTLS.ServerName != "fallback.example" {
+		t.Fatalf("fallback ServerName = %q, want fallback.example", cfgTLS.ServerName)
+	}
+	if len(cfgTLS.EncryptedClientHelloConfigList) != 0 {
+		t.Fatalf("fallback ECH config list = %v, want empty", cfgTLS.EncryptedClientHelloConfigList)
+	}
+	if !cfgTLS.InsecureSkipVerify {
+		t.Fatal("buildUnifiedTLSConfig did not preserve insecure=true on fallback branch")
+	}
+}
+
+func TestGenerateSelfSignedCert(t *testing.T) {
+	cert, err := generateSelfSignedCert()
+	if err != nil {
+		t.Fatalf("generateSelfSignedCert returned error: %v", err)
+	}
+	if len(cert.Certificate) == 0 {
+		t.Fatal("generateSelfSignedCert returned no certificate chain")
+	}
+	if cert.PrivateKey == nil {
+		t.Fatal("generateSelfSignedCert returned nil private key")
+	}
+	parsed, err := x509.ParseCertificate(cert.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse generated certificate: %v", err)
+	}
+	if len(parsed.ExtKeyUsage) != 1 || parsed.ExtKeyUsage[0] != x509.ExtKeyUsageServerAuth {
+		t.Fatalf("ExtKeyUsage = %v, want server auth", parsed.ExtKeyUsage)
+	}
+	if time.Now().After(parsed.NotAfter) {
+		t.Fatalf("generated certificate is expired: %v", parsed.NotAfter)
+	}
+}
+
+func preserveTLSGlobals(t *testing.T) {
+	t.Helper()
+	oldClientCA, oldClientCert, oldClientKey := clientCAFile, clientCertFile, clientKeyFile
+	oldInsecure, oldFallback := insecure, fallback
+	echListMu.RLock()
+	oldECHList := append([]byte(nil), echList...)
+	echListMu.RUnlock()
+	t.Cleanup(func() {
+		clientCAFile, clientCertFile, clientKeyFile = oldClientCA, oldClientCert, oldClientKey
+		insecure, fallback = oldInsecure, oldFallback
+		setTestECHList(oldECHList)
+	})
+}
+
+func setTestECHList(value []byte) {
+	echListMu.Lock()
+	defer echListMu.Unlock()
+	echList = append([]byte(nil), value...)
 }
 
 func TestLoadConfigFileRejectsUnknownFields(t *testing.T) {
