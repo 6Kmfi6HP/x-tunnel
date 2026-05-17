@@ -40,8 +40,8 @@ jobs:
       - name: Race
         run: go test -race -count=1 -timeout=3m ./...
 
-      - name: Fuzz protocol hello smoke
-        run: go test -run '^$' -fuzz FuzzReadProtocolHello -fuzztime=2s -parallel=1 ./internal/app
+      - name: Fuzz smux open header smoke
+        run: go test -run '^$' -fuzz FuzzReadSmuxOpenHeader -fuzztime=2s -parallel=1 ./internal/app
 
       - name: Fuzz SOCKS5 UDP smoke
         run: go test -run '^$' -fuzz FuzzParseSOCKS5UDPPacket -fuzztime=2s -parallel=1 ./internal/app

@@ -457,30 +457,44 @@ func (p *ECHPool) openUDPStream(target string) (*smux.Stream, int, int, error) {
 
 // ======================== TCP Forwarder ========================
 
-func runTCPListener(ctx context.Context, rule string) {
+func startTCPListener(ctx context.Context, rule string) (*runtimeListener, error) {
 	lAddr, tAddr, err := parseTCPForwardRule(rule)
 	if err != nil {
-		log.Fatalf("[客户端] TCP转发地址解析失败: %v", err)
+		return nil, fmt.Errorf("[客户端] TCP转发地址解析失败: %w", err)
 	}
 	l, err := net.Listen("tcp", lAddr)
 	if err != nil {
-		log.Fatalf("[客户端] TCP监听失败: %v", err)
+		return nil, fmt.Errorf("[客户端] TCP监听失败: %w", err)
 	}
+	listener := newRuntimeListener("tcp", rule, "tcp://"+l.Addr().String()+"/"+tAddr, l.Close)
 	go func() {
 		<-ctx.Done()
-		_ = l.Close()
+		_ = listener.Close()
 	}()
 	log.Printf("[客户端] TCP转发: %s -> %s", lAddr, tAddr)
-	for {
-		c, err := l.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+	go func() {
+		defer listener.finish(nil)
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
-			continue
+			go handleLocalTCP(c, tAddr)
 		}
-		go handleLocalTCP(c, tAddr)
+	}()
+	return listener, nil
+}
+
+func runTCPListener(ctx context.Context, rule string) error {
+	listener, err := startTCPListener(ctx, rule)
+	if err != nil {
+		return err
 	}
+	<-listener.done
+	return nil
 }
 
 func handleLocalTCP(c net.Conn, target string) {

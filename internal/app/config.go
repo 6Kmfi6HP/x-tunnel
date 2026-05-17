@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -38,21 +39,25 @@ type GlobalConfig struct {
 	ReadBuf int
 }
 
-var cfg = GlobalConfig{
-	DialTimeout:        3 * time.Second,
-	WSHandshakeTimeout: 5 * time.Second,
-	ReconnectDelay:     1 * time.Second,
-	ReconnectMaxDelay:  30 * time.Second,
-	ReconnectJitter:    500 * time.Millisecond,
-	RTTProbeTimeout:    2 * time.Second,
-	DNSQueryTimeout:    3 * time.Second,
-	ECHRetryDelay:      2 * time.Second,
-	UDPReadTimeout:     1 * time.Second,
-	ShutdownTimeout:    5 * time.Second,
-	AuthSkew:           5 * time.Minute,
-	PreAuthTimeout:     5 * time.Second,
-	ReadBuf:            64 * 1024,
+func defaultGlobalConfig() GlobalConfig {
+	return GlobalConfig{
+		DialTimeout:        3 * time.Second,
+		WSHandshakeTimeout: 5 * time.Second,
+		ReconnectDelay:     1 * time.Second,
+		ReconnectMaxDelay:  30 * time.Second,
+		ReconnectJitter:    500 * time.Millisecond,
+		RTTProbeTimeout:    2 * time.Second,
+		DNSQueryTimeout:    3 * time.Second,
+		ECHRetryDelay:      2 * time.Second,
+		UDPReadTimeout:     1 * time.Second,
+		ShutdownTimeout:    5 * time.Second,
+		AuthSkew:           5 * time.Minute,
+		PreAuthTimeout:     5 * time.Second,
+		ReadBuf:            64 * 1024,
+	}
 }
+
+var cfg = defaultGlobalConfig()
 
 var bufPool = sync.Pool{New: func() any { b := make([]byte, 64*1024); return &b }}
 
@@ -141,6 +146,9 @@ var (
 	connectionNum       int
 	insecure            bool
 	ips                 string
+	controlAddr         string
+	readyFile           string
+	controlTokenFile    string
 
 	dnsServer string
 	echDomain string
@@ -232,6 +240,9 @@ func init() {
 	flag.BoolVar(&fallback, "fallback", false, "是否禁用 ECH 并回落到普通 TLS 1.3（仅 wss 模式生效，默认 false）")
 	flag.IntVar(&connectionNum, "n", 3, "每个IP建立的WebSocket连接数量")
 	flag.StringVar(&ips, "ips", "", "服务端解析目标地址的IP偏好 (仅客户端有效)\n 4: 仅IPv4\n 6: 仅IPv6\n 4,6: IPv4优先\n 6,4: IPv6优先")
+	flag.StringVar(&controlAddr, "control", "", "可选本地控制 API 监听地址，如 127.0.0.1:0")
+	flag.StringVar(&readyFile, "ready-file", "", "可选 sidecar ready JSON 文件路径，需配合 -control 使用")
+	flag.StringVar(&controlTokenFile, "control-token-file", "", "可选控制 API bearer token 文件路径，需配合 -control 使用")
 	flag.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP/DNS 目标拨号超时时间")
 	flag.DurationVar(&cfg.WSHandshakeTimeout, "ws-handshake-timeout", cfg.WSHandshakeTimeout, "WebSocket 握手超时时间")
 	flag.DurationVar(&cfg.ReconnectDelay, "reconnect-delay", cfg.ReconnectDelay, "客户端重连初始退避时间")
@@ -307,11 +318,212 @@ func visitedFlags() map[string]bool {
 	return seen
 }
 
+type CLIOverrides map[string]bool
+
+type runtimeValues struct {
+	ListenAddr          string
+	ForwardAddr         string
+	IPAddr              string
+	UDPBlockPortsStr    string
+	CertFile            string
+	KeyFile             string
+	ClientCAFile        string
+	ClientCertFile      string
+	ClientKeyFile       string
+	Token               string
+	MetricsAddr         string
+	CIDRs               string
+	TargetAllowCIDRs    string
+	TargetDenyCIDRs     string
+	TargetAllowHosts    string
+	TargetDenyHosts     string
+	MaxClientSessions   int
+	MaxStreamsPerClient int
+	ConnectionNum       int
+	Insecure            bool
+	IPS                 string
+	DNSServer           string
+	ECHDomain           string
+	Fallback            bool
+	Global              GlobalConfig
+	WebSocketFrontProxy WebSocketFrontProxyConfig
+}
+
+type RuntimeConfig struct {
+	values     runtimeValues
+	startup    *startupConfig
+	ConfigHash string
+}
+
+func currentRuntimeValues() runtimeValues {
+	return runtimeValues{
+		ListenAddr:          listenAddr,
+		ForwardAddr:         forwardAddr,
+		IPAddr:              ipAddr,
+		UDPBlockPortsStr:    udpBlockPortsStr,
+		CertFile:            certFile,
+		KeyFile:             keyFile,
+		ClientCAFile:        clientCAFile,
+		ClientCertFile:      clientCertFile,
+		ClientKeyFile:       clientKeyFile,
+		Token:               token,
+		MetricsAddr:         metricsAddr,
+		CIDRs:               cidrs,
+		TargetAllowCIDRs:    targetAllowCIDRs,
+		TargetDenyCIDRs:     targetDenyCIDRs,
+		TargetAllowHosts:    targetAllowHosts,
+		TargetDenyHosts:     targetDenyHosts,
+		MaxClientSessions:   maxClientSessions,
+		MaxStreamsPerClient: maxStreamsPerClient,
+		ConnectionNum:       connectionNum,
+		Insecure:            insecure,
+		IPS:                 ips,
+		DNSServer:           dnsServer,
+		ECHDomain:           echDomain,
+		Fallback:            fallback,
+		Global:              cfg,
+		WebSocketFrontProxy: cloneWebSocketFrontProxyConfig(websocketFrontProxyConfig),
+	}
+}
+
+func defaultRuntimeValues() runtimeValues {
+	return runtimeValues{
+		UDPBlockPortsStr: "443",
+		CIDRs:            "0.0.0.0/0,::/0",
+		ConnectionNum:    3,
+		DNSServer:        "https://doh.pub/dns-query",
+		ECHDomain:        "cloudflare-ech.com",
+		Global:           defaultGlobalConfig(),
+	}
+}
+
+func (values runtimeValues) applyGlobals() {
+	listenAddr = values.ListenAddr
+	forwardAddr = values.ForwardAddr
+	ipAddr = values.IPAddr
+	udpBlockPortsStr = values.UDPBlockPortsStr
+	certFile = values.CertFile
+	keyFile = values.KeyFile
+	clientCAFile = values.ClientCAFile
+	clientCertFile = values.ClientCertFile
+	clientKeyFile = values.ClientKeyFile
+	token = values.Token
+	metricsAddr = values.MetricsAddr
+	cidrs = values.CIDRs
+	targetAllowCIDRs = values.TargetAllowCIDRs
+	targetDenyCIDRs = values.TargetDenyCIDRs
+	targetAllowHosts = values.TargetAllowHosts
+	targetDenyHosts = values.TargetDenyHosts
+	maxClientSessions = values.MaxClientSessions
+	maxStreamsPerClient = values.MaxStreamsPerClient
+	connectionNum = values.ConnectionNum
+	insecure = values.Insecure
+	ips = values.IPS
+	dnsServer = values.DNSServer
+	echDomain = values.ECHDomain
+	fallback = values.Fallback
+	cfg = values.Global
+	websocketFrontProxyConfig = cloneWebSocketFrontProxyConfig(values.WebSocketFrontProxy)
+}
+
+func newRuntimeConfig(values runtimeValues, startup *startupConfig) RuntimeConfig {
+	sum := sha256.Sum256([]byte(fmt.Sprintf("%#v", values)))
+	return RuntimeConfig{
+		values:     values,
+		startup:    startup,
+		ConfigHash: fmt.Sprintf("%x", sum[:]),
+	}
+}
+
+func LoadConfig(path string, overrides CLIOverrides) (RuntimeConfig, error) {
+	values := currentRuntimeValues()
+	if path != "" {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return RuntimeConfig{}, err
+		}
+		if err := applyConfigJSONToValues(raw, map[string]bool(overrides), &values); err != nil {
+			return RuntimeConfig{}, err
+		}
+	}
+	if strings.TrimSpace(values.ListenAddr) == "" {
+		return RuntimeConfig{}, fmt.Errorf("至少需要一个监听地址")
+	}
+	startup, err := validateStartupConfigValues(values)
+	if err != nil {
+		return RuntimeConfig{}, err
+	}
+	return newRuntimeConfig(values, startup), nil
+}
+
+func ValidateConfig(config RuntimeConfig) error {
+	_, err := validateStartupConfigValues(config.values)
+	return err
+}
+
+func CheckConfigJSON(raw []byte) error {
+	values := defaultRuntimeValues()
+	if err := applyConfigJSONToValues(raw, nil, &values); err != nil {
+		return err
+	}
+	if strings.TrimSpace(values.ListenAddr) == "" {
+		return fmt.Errorf("至少需要一个监听地址")
+	}
+	_, err := validateStartupConfigValues(values)
+	return err
+}
+
+func FormatConfigJSON(raw []byte) ([]byte, error) {
+	if err := CheckConfigJSON(raw); err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	normalizeConfigFieldAliases(fields)
+	formatted, err := json.MarshalIndent(fields, "", "  ")
+	if err != nil {
+		return nil, err
+	}
+	formatted = append(formatted, '\n')
+	return formatted, nil
+}
+
+func normalizeConfigFieldAliases(fields map[string]json.RawMessage) {
+	aliases := map[string]string{
+		"allow-target": "allow_target",
+		"deny-target":  "deny_target",
+		"allow-host":   "allow_host",
+		"deny-host":    "deny_host",
+		"max-clients":  "max_clients",
+		"max-streams":  "max_streams",
+		"client-ca":    "client_ca",
+		"client-cert":  "client_cert",
+		"client-key":   "client_key",
+	}
+	for alias, canonical := range aliases {
+		if value, ok := fields[alias]; ok {
+			fields[canonical] = value
+			delete(fields, alias)
+		}
+	}
+}
+
 func loadConfigFile(path string, seen map[string]bool) error {
+	values := currentRuntimeValues()
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		return err
 	}
+	if err := applyConfigJSONToValues(raw, seen, &values); err != nil {
+		return err
+	}
+	values.applyGlobals()
+	return nil
+}
+
+func applyConfigJSONToValues(raw []byte, seen map[string]bool, values *runtimeValues) error {
 	dec := json.NewDecoder(bytes.NewReader(raw))
 	dec.DisallowUnknownFields()
 	var fc FileConfig
@@ -361,79 +573,79 @@ func loadConfigFile(path string, seen map[string]bool) error {
 	if err != nil {
 		return err
 	}
-	applyStringConfig(seen, "l", fc.Listen, &listenAddr)
-	applyStringConfig(seen, "f", fc.Forward, &forwardAddr)
-	applyStringConfig(seen, "ip", fc.IP, &ipAddr)
-	applyStringConfig(seen, "block", fc.Block, &udpBlockPortsStr)
-	applyStringConfig(seen, "cert", fc.Cert, &certFile)
-	applyStringConfig(seen, "key", fc.Key, &keyFile)
-	applyStringConfig(seen, "client-ca", clientCA, &clientCAFile)
-	applyStringConfig(seen, "client-cert", clientCert, &clientCertFile)
-	applyStringConfig(seen, "client-key", clientKey, &clientKeyFile)
-	applyStringConfig(seen, "token", fc.Token, &token)
-	applyStringConfig(seen, "metrics", fc.Metrics, &metricsAddr)
-	applyStringConfig(seen, "cidr", fc.CIDR, &cidrs)
-	applyStringConfig(seen, "allow-target", allowTarget, &targetAllowCIDRs)
-	applyStringConfig(seen, "deny-target", denyTarget, &targetDenyCIDRs)
-	applyStringConfig(seen, "allow-host", allowHost, &targetAllowHosts)
-	applyStringConfig(seen, "deny-host", denyHost, &targetDenyHosts)
-	applyStringConfig(seen, "dns", fc.DNS, &dnsServer)
-	applyStringConfig(seen, "ech", fc.ECH, &echDomain)
-	applyStringConfig(seen, "ips", fc.IPS, &ips)
+	applyStringConfig(seen, "l", fc.Listen, &values.ListenAddr)
+	applyStringConfig(seen, "f", fc.Forward, &values.ForwardAddr)
+	applyStringConfig(seen, "ip", fc.IP, &values.IPAddr)
+	applyStringConfig(seen, "block", fc.Block, &values.UDPBlockPortsStr)
+	applyStringConfig(seen, "cert", fc.Cert, &values.CertFile)
+	applyStringConfig(seen, "key", fc.Key, &values.KeyFile)
+	applyStringConfig(seen, "client-ca", clientCA, &values.ClientCAFile)
+	applyStringConfig(seen, "client-cert", clientCert, &values.ClientCertFile)
+	applyStringConfig(seen, "client-key", clientKey, &values.ClientKeyFile)
+	applyStringConfig(seen, "token", fc.Token, &values.Token)
+	applyStringConfig(seen, "metrics", fc.Metrics, &values.MetricsAddr)
+	applyStringConfig(seen, "cidr", fc.CIDR, &values.CIDRs)
+	applyStringConfig(seen, "allow-target", allowTarget, &values.TargetAllowCIDRs)
+	applyStringConfig(seen, "deny-target", denyTarget, &values.TargetDenyCIDRs)
+	applyStringConfig(seen, "allow-host", allowHost, &values.TargetAllowHosts)
+	applyStringConfig(seen, "deny-host", denyHost, &values.TargetDenyHosts)
+	applyStringConfig(seen, "dns", fc.DNS, &values.DNSServer)
+	applyStringConfig(seen, "ech", fc.ECH, &values.ECHDomain)
+	applyStringConfig(seen, "ips", fc.IPS, &values.IPS)
 	if fc.Connections != nil && !seen["n"] {
-		connectionNum = *fc.Connections
+		values.ConnectionNum = *fc.Connections
 	}
-	if err := applyNonNegativeIntConfig(seen, "max-clients", maxClients, &maxClientSessions); err != nil {
+	if err := applyNonNegativeIntConfig(seen, "max-clients", maxClients, &values.MaxClientSessions); err != nil {
 		return err
 	}
-	if err := applyNonNegativeIntConfig(seen, "max-streams", maxStreams, &maxStreamsPerClient); err != nil {
+	if err := applyNonNegativeIntConfig(seen, "max-streams", maxStreams, &values.MaxStreamsPerClient); err != nil {
 		return err
 	}
 	if fc.Insecure != nil && !seen["insecure"] {
-		insecure = *fc.Insecure
+		values.Insecure = *fc.Insecure
 	}
 	if fc.Fallback != nil && !seen["fallback"] {
-		fallback = *fc.Fallback
+		values.Fallback = *fc.Fallback
 	}
 	if fc.WebSocketFrontProxy != nil {
-		websocketFrontProxyConfig = cloneWebSocketFrontProxyConfig(*fc.WebSocketFrontProxy)
+		values.WebSocketFrontProxy = cloneWebSocketFrontProxyConfig(*fc.WebSocketFrontProxy)
 	} else {
-		websocketFrontProxyConfig = WebSocketFrontProxyConfig{}
+		values.WebSocketFrontProxy = WebSocketFrontProxyConfig{}
 	}
-	if err := applyDurationConfig(seen, "dial-timeout", fc.DialTimeout, &cfg.DialTimeout); err != nil {
+	if err := applyDurationConfig(seen, "dial-timeout", fc.DialTimeout, &values.Global.DialTimeout); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "ws-handshake-timeout", fc.WSHandshakeTimeout, &cfg.WSHandshakeTimeout); err != nil {
+	if err := applyDurationConfig(seen, "ws-handshake-timeout", fc.WSHandshakeTimeout, &values.Global.WSHandshakeTimeout); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "reconnect-delay", fc.ReconnectDelay, &cfg.ReconnectDelay); err != nil {
+	if err := applyDurationConfig(seen, "reconnect-delay", fc.ReconnectDelay, &values.Global.ReconnectDelay); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "reconnect-max-delay", fc.ReconnectMaxDelay, &cfg.ReconnectMaxDelay); err != nil {
+	if err := applyDurationConfig(seen, "reconnect-max-delay", fc.ReconnectMaxDelay, &values.Global.ReconnectMaxDelay); err != nil {
 		return err
 	}
-	if err := applyNonNegativeDurationConfig(seen, "reconnect-jitter", fc.ReconnectJitter, &cfg.ReconnectJitter); err != nil {
+	if err := applyNonNegativeDurationConfig(seen, "reconnect-jitter", fc.ReconnectJitter, &values.Global.ReconnectJitter); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "rtt-timeout", fc.RTTProbeTimeout, &cfg.RTTProbeTimeout); err != nil {
+	if err := applyDurationConfig(seen, "rtt-timeout", fc.RTTProbeTimeout, &values.Global.RTTProbeTimeout); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "dns-timeout", fc.DNSQueryTimeout, &cfg.DNSQueryTimeout); err != nil {
+	if err := applyDurationConfig(seen, "dns-timeout", fc.DNSQueryTimeout, &values.Global.DNSQueryTimeout); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "ech-retry-delay", fc.ECHRetryDelay, &cfg.ECHRetryDelay); err != nil {
+	if err := applyDurationConfig(seen, "ech-retry-delay", fc.ECHRetryDelay, &values.Global.ECHRetryDelay); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "udp-read-timeout", fc.UDPReadTimeout, &cfg.UDPReadTimeout); err != nil {
+	if err := applyDurationConfig(seen, "udp-read-timeout", fc.UDPReadTimeout, &values.Global.UDPReadTimeout); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "shutdown-timeout", fc.ShutdownTimeout, &cfg.ShutdownTimeout); err != nil {
+	if err := applyDurationConfig(seen, "shutdown-timeout", fc.ShutdownTimeout, &values.Global.ShutdownTimeout); err != nil {
 		return err
 	}
-	if err := applyNonNegativeDurationConfig(seen, "auth-skew", fc.AuthSkew, &cfg.AuthSkew); err != nil {
+	if err := applyNonNegativeDurationConfig(seen, "auth-skew", fc.AuthSkew, &values.Global.AuthSkew); err != nil {
 		return err
 	}
-	if err := applyDurationConfig(seen, "preauth-timeout", fc.PreAuthTimeout, &cfg.PreAuthTimeout); err != nil {
+	if err := applyDurationConfig(seen, "preauth-timeout", fc.PreAuthTimeout, &values.Global.PreAuthTimeout); err != nil {
 		return err
 	}
 	return nil
@@ -517,64 +729,72 @@ func validateCertificatePair(certPath, keyPath string) error {
 }
 
 func validateGlobalConfig() error {
+	return validateGlobalConfigValues(cfg, maxClientSessions, maxStreamsPerClient)
+}
+
+func validateGlobalConfigValues(global GlobalConfig, maxClients, maxStreams int) error {
 	checks := []struct {
 		name  string
 		value time.Duration
 	}{
-		{name: "dial-timeout", value: cfg.DialTimeout},
-		{name: "ws-handshake-timeout", value: cfg.WSHandshakeTimeout},
-		{name: "reconnect-delay", value: cfg.ReconnectDelay},
-		{name: "reconnect-max-delay", value: cfg.ReconnectMaxDelay},
-		{name: "rtt-timeout", value: cfg.RTTProbeTimeout},
-		{name: "dns-timeout", value: cfg.DNSQueryTimeout},
-		{name: "ech-retry-delay", value: cfg.ECHRetryDelay},
-		{name: "udp-read-timeout", value: cfg.UDPReadTimeout},
-		{name: "shutdown-timeout", value: cfg.ShutdownTimeout},
-		{name: "preauth-timeout", value: cfg.PreAuthTimeout},
+		{name: "dial-timeout", value: global.DialTimeout},
+		{name: "ws-handshake-timeout", value: global.WSHandshakeTimeout},
+		{name: "reconnect-delay", value: global.ReconnectDelay},
+		{name: "reconnect-max-delay", value: global.ReconnectMaxDelay},
+		{name: "rtt-timeout", value: global.RTTProbeTimeout},
+		{name: "dns-timeout", value: global.DNSQueryTimeout},
+		{name: "ech-retry-delay", value: global.ECHRetryDelay},
+		{name: "udp-read-timeout", value: global.UDPReadTimeout},
+		{name: "shutdown-timeout", value: global.ShutdownTimeout},
+		{name: "preauth-timeout", value: global.PreAuthTimeout},
 	}
 	for _, check := range checks {
 		if check.value <= 0 {
 			return fmt.Errorf("%s 必须大于 0", check.name)
 		}
 	}
-	if cfg.ReconnectJitter < 0 {
+	if global.ReconnectJitter < 0 {
 		return fmt.Errorf("reconnect-jitter 不能小于 0")
 	}
-	if cfg.AuthSkew < 0 {
+	if global.AuthSkew < 0 {
 		return fmt.Errorf("auth-skew 不能小于 0")
 	}
-	if cfg.ReconnectMaxDelay < cfg.ReconnectDelay {
+	if global.ReconnectMaxDelay < global.ReconnectDelay {
 		return fmt.Errorf("reconnect-max-delay 不能小于 reconnect-delay")
 	}
-	if maxClientSessions < 0 {
+	if maxClients < 0 {
 		return fmt.Errorf("max-clients 不能小于 0")
 	}
-	if maxStreamsPerClient < 0 {
+	if maxStreams < 0 {
 		return fmt.Errorf("max-streams 不能小于 0")
 	}
 	return nil
 }
 
 func validateMTLSConfig(isServer bool, serverScheme string) error {
-	if err := validateCertificatePair(certFile, keyFile); err != nil {
+	return validateMTLSConfigValues(isServer, serverScheme, currentRuntimeValues())
+}
+
+func validateMTLSConfigValues(isServer bool, serverScheme string, values runtimeValues) error {
+	if err := validateCertificatePair(values.CertFile, values.KeyFile); err != nil {
 		return fmt.Errorf("server cert/key: %w", err)
 	}
-	if err := validateCertificatePair(clientCertFile, clientKeyFile); err != nil {
+	if err := validateCertificatePair(values.ClientCertFile, values.ClientKeyFile); err != nil {
 		return fmt.Errorf("client cert/key: %w", err)
 	}
 	if isServer {
-		if clientCAFile != "" && serverScheme != "wss" {
+		if values.ClientCAFile != "" && serverScheme != "wss" {
 			return fmt.Errorf("-client-ca 只能用于 wss 服务端")
 		}
-		if clientCertFile != "" || clientKeyFile != "" {
+		if values.ClientCertFile != "" || values.ClientKeyFile != "" {
 			return fmt.Errorf("-client-cert/-client-key 只能用于客户端模式")
 		}
 		return nil
 	}
-	if certFile != "" || keyFile != "" {
+	if values.CertFile != "" || values.KeyFile != "" {
 		return fmt.Errorf("-cert/-key 只能用于服务端模式")
 	}
-	if clientCAFile != "" {
+	if values.ClientCAFile != "" {
 		return fmt.Errorf("-client-ca 只能用于服务端模式")
 	}
 	return nil
@@ -833,32 +1053,36 @@ func validateClientStartupConfig(forward string, connections int, clientCert, cl
 }
 
 func validateStartupConfig() (*startupConfig, error) {
-	if err := validateToken(token); err != nil {
+	return validateStartupConfigValues(currentRuntimeValues())
+}
+
+func validateStartupConfigValues(values runtimeValues) (*startupConfig, error) {
+	if err := validateToken(values.Token); err != nil {
 		return nil, fmt.Errorf("token 无效: %w", err)
 	}
-	if err := validateGlobalConfig(); err != nil {
+	if err := validateGlobalConfigValues(values.Global, values.MaxClientSessions, values.MaxStreamsPerClient); err != nil {
 		return nil, fmt.Errorf("全局参数无效: %w", err)
 	}
-	if metricsAddr != "" {
-		if err := validateListenHostPort(metricsAddr); err != nil {
+	if values.MetricsAddr != "" {
+		if err := validateListenHostPort(values.MetricsAddr); err != nil {
 			return nil, fmt.Errorf("metrics 地址无效: %w", err)
 		}
 	}
-	targetIPs := splitCommaList(ipAddr)
+	targetIPs := splitCommaList(values.IPAddr)
 	for _, targetIP := range targetIPs {
 		if err := validateDialIPOverride(targetIP); err != nil {
 			return nil, fmt.Errorf("-ip 参数无效 %q: %w", targetIP, err)
 		}
 	}
-	ipStrategyValue, err := parseIPStrategyStrict(ips)
+	ipStrategyValue, err := parseIPStrategyStrict(values.IPS)
 	if err != nil {
 		return nil, fmt.Errorf("-ips 参数无效: %w", err)
 	}
-	listeners, isServer, serverListen, serverScheme, err := classifyListeners(listenAddr)
+	listeners, isServer, serverListen, serverScheme, err := classifyListeners(values.ListenAddr)
 	if err != nil {
 		return nil, err
 	}
-	if err := validateMTLSConfig(isServer, serverScheme); err != nil {
+	if err := validateMTLSConfigValues(isServer, serverScheme, values); err != nil {
 		return nil, fmt.Errorf("mTLS 配置无效: %w", err)
 	}
 	startup := &startupConfig{
@@ -870,11 +1094,11 @@ func validateStartupConfig() (*startupConfig, error) {
 		IPStrategy:   ipStrategyValue,
 	}
 	if isServer {
-		sourceNets, err := parseSourceCIDRs(cidrs)
+		sourceNets, err := parseSourceCIDRs(values.CIDRs)
 		if err != nil {
 			return nil, fmt.Errorf("source CIDR 配置无效: %w", err)
 		}
-		policy, socksConfig, err := validateServerStartupConfig(forwardAddr, targetAllowCIDRs, targetDenyCIDRs, targetAllowHosts, targetDenyHosts)
+		policy, socksConfig, err := validateServerStartupConfig(values.ForwardAddr, values.TargetAllowCIDRs, values.TargetDenyCIDRs, values.TargetAllowHosts, values.TargetDenyHosts)
 		if err != nil {
 			return nil, err
 		}
@@ -883,16 +1107,16 @@ func validateStartupConfig() (*startupConfig, error) {
 		startup.SOCKS5Config = socksConfig
 		return startup, nil
 	}
-	clientConfig, err := validateClientStartupConfig(forwardAddr, connectionNum, clientCertFile, clientKeyFile, insecure, fallback, udpBlockPortsStr)
+	clientConfig, err := validateClientStartupConfig(values.ForwardAddr, values.ConnectionNum, values.ClientCertFile, values.ClientKeyFile, values.Insecure, values.Fallback, values.UDPBlockPortsStr)
 	if err != nil {
 		return nil, err
 	}
 	if clientConfig.ForwardScheme == "wss" && !clientConfig.Fallback {
-		if err := validateECHLookupConfig(echDomain, dnsServer); err != nil {
+		if err := validateECHLookupConfig(values.ECHDomain, values.DNSServer); err != nil {
 			return nil, fmt.Errorf("ECH 查询配置无效: %w", err)
 		}
 	}
-	if err := validateWebSocketFrontProxyConfig(websocketFrontProxyConfig); err != nil {
+	if err := validateWebSocketFrontProxyConfig(values.WebSocketFrontProxy); err != nil {
 		return nil, fmt.Errorf("WebSocket 前置代理配置无效: %w", err)
 	}
 	startup.Client = clientConfig

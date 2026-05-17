@@ -15,31 +15,45 @@ import (
 	"time"
 )
 
-func runHTTPListener(ctx context.Context, addr string) {
+func startHTTPListener(ctx context.Context, addr string) (*runtimeListener, error) {
 	h, u, p, err := parseAuthAndAddr(strings.TrimPrefix(addr, "http://"))
 	if err != nil {
-		log.Fatalf("[客户端] HTTP地址解析失败: %v", err)
+		return nil, fmt.Errorf("[客户端] HTTP地址解析失败: %w", err)
 	}
 	l, err := net.Listen("tcp", h)
 	if err != nil {
-		log.Fatalf("[客户端] HTTP监听失败: %v", err)
+		return nil, fmt.Errorf("[客户端] HTTP监听失败: %w", err)
 	}
+	listener := newRuntimeListener("http", addr, "http://"+l.Addr().String(), l.Close)
 	go func() {
 		<-ctx.Done()
-		_ = l.Close()
+		_ = listener.Close()
 	}()
 	log.Printf("[客户端] HTTP 代理: %s", h)
 	cfgp := &ProxyConfig{u, p, h}
-	for {
-		c, err := l.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+	go func() {
+		defer listener.finish(nil)
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
-			continue
+			go handleHTTP(c, cfgp)
 		}
-		go handleHTTP(c, cfgp)
+	}()
+	return listener, nil
+}
+
+func runHTTPListener(ctx context.Context, addr string) error {
+	listener, err := startHTTPListener(ctx, addr)
+	if err != nil {
+		return err
 	}
+	<-listener.done
+	return nil
 }
 
 func handleHTTP(c net.Conn, cfgp *ProxyConfig) {

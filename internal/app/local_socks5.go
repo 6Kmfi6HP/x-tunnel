@@ -58,31 +58,45 @@ func parseAuthAndAddr(full string) (string, string, string, error) {
 	return h, u, p, nil
 }
 
-func runSOCKS5Listener(ctx context.Context, addr string) {
+func startSOCKS5Listener(ctx context.Context, addr string) (*runtimeListener, error) {
 	h, u, p, err := parseAuthAndAddr(strings.TrimPrefix(addr, "socks5://"))
 	if err != nil {
-		log.Fatalf("[客户端] SOCKS5地址解析失败: %v", err)
+		return nil, fmt.Errorf("[客户端] SOCKS5地址解析失败: %w", err)
 	}
 	l, err := net.Listen("tcp", h)
 	if err != nil {
-		log.Fatalf("[客户端] SOCKS5监听失败: %v", err)
+		return nil, fmt.Errorf("[客户端] SOCKS5监听失败: %w", err)
 	}
+	listener := newRuntimeListener("socks5", addr, "socks5://"+l.Addr().String(), l.Close)
 	go func() {
 		<-ctx.Done()
-		_ = l.Close()
+		_ = listener.Close()
 	}()
 	log.Printf("[客户端] SOCKS5 代理: %s", h)
 	cfgp := &ProxyConfig{u, p, h}
-	for {
-		c, err := l.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return
+	go func() {
+		defer listener.finish(nil)
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				continue
 			}
-			continue
+			go handleSOCKS5(c, cfgp)
 		}
-		go handleSOCKS5(c, cfgp)
+	}()
+	return listener, nil
+}
+
+func runSOCKS5Listener(ctx context.Context, addr string) error {
+	listener, err := startSOCKS5Listener(ctx, addr)
+	if err != nil {
+		return err
 	}
+	<-listener.done
+	return nil
 }
 
 func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {

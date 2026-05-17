@@ -216,10 +216,10 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	)
 }
 
-func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet) {
+func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet, onFatal func(error)) (*runtimeListener, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
-		log.Fatalf("[服务端] WS 地址无效: %v", err)
+		return nil, fmt.Errorf("[服务端] WS 地址无效: %w", err)
 	}
 	path := u.Path
 	if path == "" {
@@ -259,45 +259,75 @@ func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPN
 		go handlePreAuthWebSocketChannel(wsConn, clientIP, requestServerName(r), path)
 	})
 
-	server := &http.Server{Addr: u.Host, Handler: mux}
-	go shutdownHTTPServer(ctx, server, cfg.ShutdownTimeout)
-
+	server := &http.Server{Handler: mux}
 	if u.Scheme == "wss" {
 		if certFile != "" && keyFile != "" {
-			server.TLSConfig = &tls.Config{MinVersion: tls.VersionTLS13}
-			if err := configureServerClientAuth(server.TLSConfig); err != nil {
-				log.Fatalf("[服务端] mTLS 配置失败: %v", err)
+			cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+			if err != nil {
+				return nil, fmt.Errorf("[服务端] TLS 证书加载失败: %w", err)
 			}
-			if clientCAFile != "" {
-				log.Printf("[服务端] mTLS 客户端证书认证已启用")
-			}
-			log.Printf("[服务端] WSS 启动 %s%s", u.Host, path)
-			if err := server.ListenAndServeTLS(certFile, keyFile); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Fatalf("[服务端] WSS 启动失败: %v", err)
-			}
+			server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
 		} else {
 			cert, err := generateSelfSignedCert()
 			if err != nil {
-				log.Fatalf("[服务端] 生成自签名证书失败: %v", err)
+				return nil, fmt.Errorf("[服务端] 生成自签名证书失败: %w", err)
 			}
 			server.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS13}
-			if err := configureServerClientAuth(server.TLSConfig); err != nil {
-				log.Fatalf("[服务端] mTLS 配置失败: %v", err)
-			}
-			if clientCAFile != "" {
-				log.Printf("[服务端] mTLS 客户端证书认证已启用")
-			}
-			log.Printf("[服务端] WSS 启动 %s%s", u.Host, path)
-			if err := server.ListenAndServeTLS("", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				log.Fatalf("[服务端] WSS 启动失败: %v", err)
-			}
 		}
-	} else {
-		log.Printf("[服务端] WS 启动 %s%s", u.Host, path)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Fatalf("[服务端] WS 启动失败: %v", err)
+		if err := configureServerClientAuth(server.TLSConfig); err != nil {
+			return nil, fmt.Errorf("[服务端] mTLS 配置失败: %w", err)
 		}
 	}
+
+	ln, err := net.Listen("tcp", u.Host)
+	if err != nil {
+		return nil, err
+	}
+	actual := u.Scheme + "://" + ln.Addr().String() + path
+	listener := newRuntimeListener(u.Scheme, addr, actual, func() error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	})
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+
+	if u.Scheme == "wss" {
+		if clientCAFile != "" {
+			log.Printf("[服务端] mTLS 客户端证书认证已启用")
+		}
+		log.Printf("[服务端] WSS 启动 %s%s", u.Host, path)
+	} else {
+		log.Printf("[服务端] WS 启动 %s%s", u.Host, path)
+	}
+	go func() {
+		var err error
+		if u.Scheme == "wss" {
+			err = server.ServeTLS(ln, "", "")
+		} else {
+			err = server.Serve(ln)
+		}
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			listener.finish(err)
+			if onFatal != nil {
+				onFatal(fmt.Errorf("[服务端] %s 启动失败: %w", strings.ToUpper(u.Scheme), err))
+			}
+			return
+		}
+		listener.finish(nil)
+	}()
+	return listener, nil
+}
+
+func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet) error {
+	listener, err := startWebSocketServer(ctx, addr, allowedNets, nil)
+	if err != nil {
+		return err
+	}
+	<-listener.done
+	return nil
 }
 
 func shutdownHTTPServer(ctx context.Context, server *http.Server, timeout time.Duration) {
@@ -309,18 +339,46 @@ func shutdownHTTPServer(ctx context.Context, server *http.Server, timeout time.D
 	}
 }
 
-func runMetricsServer(ctx context.Context, addr string) {
+func startMetricsServer(ctx context.Context, addr string) (*runtimeListener, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 		writeMetrics(w)
 	})
-	server := &http.Server{Addr: addr, Handler: mux}
-	go shutdownHTTPServer(ctx, server, cfg.ShutdownTimeout)
-	log.Printf("[metrics] HTTP 启动 %s/metrics", addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("[metrics] HTTP 启动失败: %v", err)
+	server := &http.Server{Handler: mux}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
 	}
+	listener := newRuntimeListener("metrics", addr, "http://"+ln.Addr().String()+"/metrics", func() error {
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		defer cancel()
+		return server.Shutdown(shutdownCtx)
+	})
+	go func() {
+		<-ctx.Done()
+		_ = listener.Close()
+	}()
+	log.Printf("[metrics] HTTP 启动 %s/metrics", addr)
+	go func() {
+		err := server.Serve(ln)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("[metrics] HTTP 启动失败: %v", err)
+			listener.finish(err)
+			return
+		}
+		listener.finish(nil)
+	}()
+	return listener, nil
+}
+
+func runMetricsServer(ctx context.Context, addr string) {
+	listener, err := startMetricsServer(ctx, addr)
+	if err != nil {
+		log.Printf("[metrics] HTTP 启动失败: %v", err)
+		return
+	}
+	<-listener.done
 }
 
 func writeMetrics(w io.Writer) {

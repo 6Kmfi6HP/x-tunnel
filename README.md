@@ -15,7 +15,7 @@ Build metadata can be injected with `-ldflags`:
 
 ```bash
 go build -ldflags "\
-  -X main.buildVersion=0.2.0 \
+  -X main.buildVersion=0.4.0 \
   -X main.buildCommit=$(git rev-parse --short HEAD) \
   -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o x-tunnel ./cmd/x-tunnel
@@ -24,14 +24,14 @@ go build -ldflags "\
 Or use the build script:
 
 ```bash
-VERSION=0.2.0 OUT=./x-tunnel ./scripts/build.sh
+VERSION=0.4.0 OUT=./x-tunnel ./scripts/build.sh
 ./x-tunnel -version
 ```
 
 Create cross-platform release artifacts:
 
 ```bash
-VERSION=0.2.0 ./scripts/release.sh
+VERSION=0.4.0 ./scripts/release.sh
 cat dist/SHA256SUMS
 ```
 
@@ -47,14 +47,14 @@ docker run --rm x-tunnel:local -version
 Tagged releases publish multi-architecture images to GHCR:
 
 ```bash
-docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.2.0
-docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.2.0 -version
+docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.4.0
+docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.4.0 -version
 ```
 
 Run a loopback-only server in a container:
 
 ```bash
-docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.2.0 \
+docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.4.0 \
   -l ws://0.0.0.0:18080/tunnel \
   -token local-test-token \
   -cidr 127.0.0.1/32
@@ -65,8 +65,8 @@ docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.2.0 \
 Push a version tag to publish GitHub Release assets and GHCR images:
 
 ```bash
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.4.0
+git push origin v0.4.0
 ```
 
 The release workflow verifies formatting, `go vet`, tests, race tests, and a
@@ -160,6 +160,42 @@ Metrics include:
 - UDP counters/gauges: total and active SOCKS5 UDP associations.
 - Client counters: reconnects, protocol negotiation outcomes, and RTT probe failures.
 - Client channel gauges: `x_tunnel_client_channel_up{channel="N"}`, `x_tunnel_client_channel_rtt_seconds{channel="N"}`, and `x_tunnel_client_channel_capabilities{channel="N"}`.
+
+## Sidecar Control API
+
+GUI or supervisor clients can start x-tunnel as a sidecar and use a loopback-only
+control API instead of parsing stdout:
+
+```bash
+./x-tunnel \
+  -config ./examples/local-client.json \
+  -control 127.0.0.1:0 \
+  -ready-file ./x-tunnel-ready.json \
+  -control-token-file ./x-tunnel-token
+```
+
+The ready file is written only after the control API is bound. It contains the
+process id, build metadata, control URL, token file path, and start time. The
+token value is stored only in the token file. `-ready-file` and
+`-control-token-file` require `-control`.
+
+Unauthenticated endpoints:
+
+- `GET /v1/version`
+- `GET /v1/health`
+
+Authenticated endpoints use `Authorization: Bearer <token>`:
+
+- `GET /v1/status`
+- `GET /v1/logs`
+- `GET /v1/metrics`
+- `POST /v1/config/check`
+- `POST /v1/config/format`
+- `POST /v1/runtime/stop`
+
+`/v1/config/check` and `/v1/config/format` accept JSON payloads; they do not
+read arbitrary local file paths. Status and logs redact URL userinfo and do not
+include the runtime token or control token.
 
 ## Config File
 

@@ -1,514 +1,496 @@
 # Core / GUI Refactor Plan
 
-This note records how to turn x-tunnel from a CLI-first program into a reusable
-runtime core that can be embedded by future GUI clients or controlled as a
-background daemon.
+这份文档记录如何把 x-tunnel 从 CLI-first 工具改造成未来 GUI 客户端可使用的内核。
 
-## References
+结论先放前面：第一阶段不要直接做一个很大的 `pkg/core`、完整事件总线、全量热重载、跨平台 named pipe 和多实例运行时。更稳的路线是先把当前 CLI 背后的运行时收敛成一个可启动、可关闭、可检查状态的内部 `Engine`，然后让 GUI 通过 sidecar 进程和本地控制 API 使用它。等 sidecar 合同跑稳定以后，再决定是否公开 Go package API。
 
-- Xray keeps the CLI in `main/run.go`: it loads config, creates a core server
-  with `core.New`, then calls `Start` and `Close`. The core package exposes an
-  instance lifecycle that is independent from flag parsing and signal handling.
-  See <https://github.com/XTLS/Xray-core/blob/main/core/xray.go> and
-  <https://github.com/XTLS/Xray-core/blob/main/main/run.go>.
-- sing-box exposes `box.New(options)`, `Start`, `Close`, managers, context, and
-  platform log hooks. Its CLI wraps that API, while `daemon` and `libbox` wrap
-  the same core for service/mobile use. See
-  <https://github.com/SagerNet/sing-box/blob/testing/box.go>,
-  <https://github.com/SagerNet/sing-box/blob/testing/cmd/sing-box/cmd_run.go>,
-  <https://github.com/SagerNet/sing-box/blob/testing/daemon/instance.go>, and
-  <https://github.com/SagerNet/sing-box/blob/testing/experimental/libbox/config.go>.
-- Clash-style clients commonly control a running core through a local external
-  controller API. The older Clash code also has a central tunnel object with
-  config reload and observable logs, but it relies on globals/singletons more
-  than x-tunnel should. See
-  <https://github.com/fossabot/clash/blob/master/tunnel/tunnel.go> and
-  <https://github.com/fossabot/clash/blob/master/hub/configs.go>.
-  For a newer Clash.Meta-style controller shape, see
-  <https://github.com/backup-genius/Clash.Meta/blob/Alpha/hub/route/server.go>,
-  <https://github.com/backup-genius/Clash.Meta/blob/Alpha/hub/route/configs.go>,
-  and
-  <https://github.com/backup-genius/Clash.Meta/blob/Alpha/hub/executor/executor.go>.
+## 目标
 
-Notes checked with `gh`:
+- 保持现有 CLI 用法不变，`./x-tunnel -config ...` 继续可用。
+- 让核心运行时不再直接拥有 flag parsing、OS signal、`os.Exit`、`log.Fatal`。
+- GUI 可以启动一个 x-tunnel sidecar，读取 ready file，调用本地控制 API，展示状态和日志，并安全停止/重启。
+- 配置验证必须可以在不启动网络监听器的情况下完成。
+- 第一版 GUI 切换配置时优先走“验证新配置 -> 停止旧 sidecar -> 启动新 sidecar”，暂不承诺任意字段热重载。
 
-- Xray `core/xray.go` has a `Server`/`Instance` lifecycle and `New`,
-  `Start`, `Close`. `main/run.go` is only an adapter around config loading,
-  `server.Start()`, signal waiting, and `server.Close()`.
-- sing-box `box.go` exposes `box.New(options)`, `Start`, and `Close`, and its
-  `Options` carries `Context` plus platform log hooks. Its CLI recreates the
-  instance on `SIGHUP`, `daemon/instance.go` wraps the same `box.Box`, and
-  `experimental/libbox/config.go` exposes `CheckConfig` and `FormatConfig`.
-- Clash/Clash.Meta exposes a local external controller with `/logs`,
-  `/traffic`, `/configs`, bearer-token authentication, and config patch/reload.
-  This is useful for GUI UX, but its heavy use of package globals is exactly
-  what x-tunnel should avoid before becoming a reusable core.
+## 暂不做
 
-The lesson is not to copy any one project. For x-tunnel, Xray gives the clean
-instance lifecycle, sing-box gives the best sidecar/library split, and Clash
-gives the GUI control surface. The risky part to avoid is a global singleton
-runtime that works for one process but cannot be embedded safely.
+- 暂不公开稳定 `pkg/core`。当前 `docs/module-layout.md` 已明确不急着支持外部 Go imports；先把内部生命周期跑顺。
+- 暂不支持一个进程里同时跑多个 x-tunnel Engine。Xray 自己也把 server lifecycle 做成实例，但注释里仍强调同一时间最多一个 server 实例运行。x-tunnel 第一阶段不需要比这些成熟项目更激进。
+- 暂不做完整 hot reload / reload plan。GUI 切配置先重启 sidecar，更诚实，也更容易测试。
+- 暂不做复杂事件总线。先做日志 ring buffer + 当前状态快照；以后 UI 需要时间线，再把日志事件化。
+- 暂不做 Windows named pipe / Unix socket。先做 loopback HTTP；命名管道以后作为安全增强。
+- 暂不把包拆成很多层。先加少量文件和接口，等边界稳定后再搬目录。
 
-The most useful reproducible `gh` lookups were:
+## 外部项目参考
 
-```powershell
-gh api -H "Accept: application/vnd.github.raw" /repos/XTLS/Xray-core/contents/core/xray.go?ref=main |
-  Select-String -Pattern "type Instance|func New|Start|Close" -Context 3,8
+以下结果在 2026-05-17 用 `gh` 查询过，目的是看它们的边界，而不是照搬实现。
 
-gh api -H "Accept: application/vnd.github.raw" /repos/SagerNet/sing-box/contents/box.go?ref=testing |
-  Select-String -Pattern "type Box|func New|Start|Close|Platform" -Context 3,8
+### Xray-core
 
-gh api -H "Accept: application/vnd.github.raw" /repos/backup-genius/Clash.Meta/contents/hub/route/server.go?ref=Alpha |
-  Select-String -Pattern "secret|Authorization|Bearer|Start" -Context 2,8
+查询：
+
+```bash
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/XTLS/Xray-core/contents/core/xray.go?ref=main" |
+  rg -n -C 4 "type Server|type Instance|func New|Start|Close"
+
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/XTLS/Xray-core/contents/main/run.go?ref=main" |
+  rg -n -C 5 "core.New|server.Start|server.Close|signal|startXray"
 ```
 
-## Current Coupling
+看到的模式：
 
-The current x-tunnel entrypoint is thin, but `internal/app` still owns too much:
+- `core/xray.go` 暴露 `Server` / `Instance`，并提供 `New`、`Start`、`Close`。
+- `main/run.go` 负责加载配置、调用 `core.New`、`server.Start()`、等待 OS signal、最后 `server.Close()`。
+- CLI 是适配器，核心生命周期不依赖 flag 和 signal。
 
-- `run.go` parses CLI flags, prints version output, reads config files, installs
-  OS signal handlers, starts metrics, and starts client/server runtime.
-- `config.go` stores runtime state as package-level variables such as listener
-  addresses, token, TLS paths, ECH options, limits, metrics address, and global
-  timeout config.
-- `front_proxy.go` adds a client-side WebSocket front proxy, but it is currently
-  also driven by package-level config (`websocketFrontProxyConfig`) and read
-  directly from the WebSocket dial path.
-- Runtime components use process-level behavior such as `log.Fatalf`, package
-  globals like `echPool`, `ipStrategy`, `targetPolicy`, and global counters.
-- The package lives under `internal`, so a separate GUI module cannot import it.
-- Startup has no readiness contract. Some listeners call `log.Fatalf`, some
-  run in goroutines, and the caller cannot reliably know which listener bound
-  successfully before the runtime is considered started.
-- Shutdown is context-driven but not owned by a runtime object. There is no
-  single `Close` path that closes listeners, channels, ECH pools, metrics,
-  background DNS/ECH refresh, and control API, then reports the final error.
-- Metrics and observable state are process-global. Running two engines in the
-  same process would mix counters, sessions, nonce replay cache, and channel
-  state.
+对 x-tunnel 的启发：
 
-These are fine for a single binary, but poor for GUI integration. A GUI needs to
-start, stop, validate, reload, display logs, inspect status, and handle errors
-without the core exiting the process.
+- 必须先有一个真实 lifecycle：`New` 创建但不启动，`Start` 启动并返回 bind/config 错误，`Close` 释放资源。
+- 但不要先追求多实例。先保证一个 Engine 被 GUI 稳定托管。
 
-## Questions To Close Blind Spots
+### sing-box
 
-These are the questions the design must answer before code is moved into
-`pkg/core`:
+查询：
 
-1. Will one process ever host multiple x-tunnel engines?
-   - Default answer: yes, at least for tests and future multi-profile GUIs.
-     Therefore no mutable runtime state should live in package globals except
-     immutable constants and reusable pools.
+```bash
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/SagerNet/sing-box/contents/box.go?ref=testing" |
+  rg -n -C 5 "type Box|type Options|func New|Start|Close|PlatformLogWriter"
 
-2. Is the first GUI expected to link Go code or launch a sidecar process?
-   - Default answer: support both surfaces, but ship the sidecar/control API
-     first because it works for Tauri, Electron, Flutter, C#, Python, and mobile
-     wrappers without binding to Go ABI stability.
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/SagerNet/sing-box/contents/daemon/instance.go?ref=testing" |
+  rg -n -C 5 "box.New|PlatformLogWriter|Start|Close"
 
-3. What does `Start` mean?
-   - It must mean all configured critical listeners and control endpoints are
-     bound, background workers are launched, and startup errors have been
-     returned to the caller. `Start` must not hide bind errors in goroutines.
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/SagerNet/sing-box/contents/experimental/libbox/config.go?ref=testing" |
+  rg -n -C 4 "CheckConfig|FormatConfig|parseConfig|box.New"
+```
 
-4. What does `Close` guarantee?
-   - It cancels the engine context, closes listeners and active transports,
-     stops metrics/control servers, waits for owned goroutines up to the
-     configured shutdown timeout, and returns an aggregated error.
+看到的模式：
 
-5. What can be reloaded without restart?
-   - Policy, logging level, selected profile metadata, and some limits can be
-     swapped in place. Listener addresses, transport type, TLS/mTLS material,
-     ECH/fallback behavior, token, connection count, and metrics/control bind
-     addresses should be treated as restart-required until each has a tested
-     in-place migration path.
+- `box.New(box.Options{Context, Options, PlatformLogWriter})` 创建 core。
+- CLI、daemon、libbox 都包装同一个 `box.Box`。
+- `experimental/libbox/config.go` 有 `CheckConfig`、`FormatConfig`，GUI/mobile 可以先校验配置。
 
-6. How should a GUI receive logs?
-   - Through structured events plus an optional text log stream. The GUI should
-     not scrape stdout. Events need levels, timestamps, component names, stable
-     error codes, and redacted fields.
+对 x-tunnel 的启发：
 
-7. How are secrets protected?
-   - Config validation and snapshot APIs must mark secret fields. Logs, status,
-     metrics labels, and control API responses must never emit `token`, proxy
-     passwords, mTLS private keys, or custom front-proxy header values such as
-     `X-T5-Auth`.
+- `RuntimeOptions` 里至少要有 `context` 和日志 sink，GUI 不应该抓 stdout。
+- 配置校验/格式化是 GUI 接入的刚需，而且应该比控制 API 更早做。
+- sidecar 和未来 Go library 可以共用同一个内部 Engine。
 
-8. How will a GUI know the core is alive?
-   - The sidecar should print or write one machine-readable ready message after
-     control bind succeeds, and the control API should expose health, version,
-     uptime, config hash, and last error.
+### Clash / Clash.Meta
 
-9. What error shape does UI code consume?
-   - Use typed errors with stable codes such as `config.invalid`,
-     `listen.bind_failed`, `transport.ech_lookup_failed`, `auth.failed`, and
-     `runtime.closed`, plus human text for display.
+查询：
 
-10. How do we avoid locking in a bad public Go API?
-    - Put the first instantiable runtime behind `internal/runtime.Engine`.
-      Promote a small, documented `pkg/core` facade only after the sidecar API
-      and tests prove the lifecycle shape.
+```bash
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/fossabot/clash/contents/hub/server.go?ref=master" |
+  rg -n -C 5 "traffic|logs|configs|ListenAndServe"
 
-## Target Shape
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/backup-genius/Clash.Meta/contents/hub/route/server.go?ref=Alpha" |
+  rg -n -C 5 "Start|Authorization|Bearer|token|logs|traffic"
 
-Use two integration surfaces:
+gh api -H "Accept: application/vnd.github.raw" \
+  "/repos/backup-genius/Clash.Meta/contents/hub/route/configs.go?ref=Alpha" |
+  rg -n -C 5 "configRouter|Put|Patch|ParseWithBytes|ApplyConfig"
+```
 
-1. A Go package API for Go-based GUIs and tests.
-2. A local control API for Tauri, Electron, Flutter, mobile, or any GUI that is
-   better off running the core as a sidecar process.
+看到的模式：
 
-The Go API should look roughly like this:
+- 老 Clash 暴露本地 external controller，包括 `/traffic`、`/logs`、`/configs`。
+- Clash.Meta 风格加入 bearer token、`/configs` PUT/PATCH、日志/流量/代理组等 GUI 面向 API。
+- 这些项目的控制面非常适合 GUI，但内部全局状态较多，不适合作为 x-tunnel 的目标架构。
+
+对 x-tunnel 的启发：
+
+- GUI 最好控制一个本地 core，而不是把 CLI stdout 当协议。
+- 控制 API 必须从第一天就有本地绑定、token、敏感信息脱敏。
+- 不要照搬 Clash 的全局 singleton。x-tunnel 当前已经有不少 globals，重构目标是减少它们，而不是把控制 API 套在 globals 外面就结束。
+
+## 当前耦合点
+
+现在 `cmd/x-tunnel/main.go` 很薄，只调用 `app.Main()`，这点是好的。
+
+真正卡死 GUI 的地方在 `internal/app`：
+
+- `internal/app/run.go` 同时做了 `flag.Parse()`、版本输出、配置文件加载、启动校验、OS signal、metrics、服务端/客户端模式分支、ECH 准备、listener goroutine 启动。
+- `internal/app/config.go` 通过 package globals 保存运行参数，例如 `listenAddr`、`forwardAddr`、`token`、TLS/mTLS 文件、ECH、metrics、timeouts、`echPool`、server/client counters 等。
+- `loadConfigFile` 会直接把 JSON 写回这些 package globals，配置加载不是纯函数。
+- `init()` 里注册所有 flags，导致配置解析和包初始化绑在一起。
+- `internal/app/server.go`、`internal/app/local_socks5.go`、`internal/app/local_http.go`、`internal/app/client.go` 的 listener 启动失败会 `log.Fatalf`，GUI 没法拿到错误对象，只会看到进程退出。
+- 服务端会话、nonce cache、metrics counters、client ECH pool 都是包级状态，sidecar 单实例还能接受，但不适合作为未来公开 library API。
+- 当前 metrics 已能提供部分状态，但 GUI 还需要更直接的 health/status/logs/stop 合同。
+
+## 推荐形态
+
+第一阶段只建立一个内部内核边界：
+
+```text
+cmd/x-tunnel
+  main.go: 设置 build info，调用 internal/app 的 CLI adapter
+
+internal/app
+  cli.go: flag/config/signal/stdout/stderr/exit code 适配
+  config.go: 现有 JSON schema、defaults、validate，逐步改成纯函数
+  engine.go: Engine lifecycle，持有 context、cancel、wg、listeners、metrics、状态
+  control.go: 本地 HTTP 控制 API，可选开启
+  logring.go: stdout logger + bounded ring buffer
+  status.go: GUI 需要的状态快照
+  server/client/local listeners: 先少量改签名，后续再拆包
+
+internal/wire
+  继续只做协议帧，不碰 GUI/CLI
+
+internal/netaddr
+  继续做地址校验
+```
+
+先不要创建这些包：
+
+```text
+pkg/core
+internal/runtime
+internal/control
+internal/events
+internal/transport
+internal/proxy
+```
+
+这些名字未来可能会出现，但第一阶段提前拆出来会让代码移动多于行为改善。
+
+## Engine 合同
+
+第一阶段的内部 API 可以很小：
 
 ```go
-package core
-
 type Engine struct {
-	// private runtime state
-}
-
-type Config struct {
-	Mode      Mode
-	Listeners []Listener
-	Server    ServerConfig
-	Client    ClientConfig
-	Transport TransportConfig
-	Network   NetworkConfig
-	TLS       TLSConfig
-	Metrics   MetricsConfig
-	Limits    LimitsConfig
-}
-
-type TransportConfig struct {
-	WebSocketFrontProxy *WebSocketFrontProxyConfig
+	// private fields
 }
 
 type RuntimeOptions struct {
 	Logger Logger
-	Events EventSink
-	Clock  Clock
-	Dialer DialerFactory
+	Build  BuildInfo
 }
 
-func LoadJSON(r io.Reader) (Config, error)
-func Validate(config Config) error
-func New(config Config, options RuntimeOptions) (*Engine, error)
+type Logger interface {
+	Printf(format string, args ...any)
+}
 
+func LoadConfig(path string, overrides CLIOverrides) (RuntimeConfig, error)
+func ValidateConfig(config RuntimeConfig) error
+func CheckConfigJSON(raw []byte) error
+func FormatConfigJSON(raw []byte) ([]byte, error)
+
+func NewEngine(config RuntimeConfig, options RuntimeOptions) (*Engine, error)
 func (e *Engine) Start(ctx context.Context) error
-func (e *Engine) Close() error
-func (e *Engine) Done() <-chan struct{}
-func (e *Engine) Err() error
-func (e *Engine) Snapshot() Snapshot
-func (e *Engine) ReloadPlan(config Config) (ReloadPlan, error)
-func (e *Engine) Reload(config Config) error
+func (e *Engine) Close(ctx context.Context) error
+func (e *Engine) Wait() error
+func (e *Engine) Status() Status
 ```
 
-`Start` should return after bind/readiness succeeds, not when the engine exits.
-`Done` should close after shutdown. `Err` should report the terminal runtime
-error if a background component failed after startup.
+语义：
 
-The CLI should become an adapter:
+- `NewEngine` 只做配置归一化、依赖准备，不监听端口。
+- `Start` 必须在关键 listener 和 control API bind 成功后才返回 nil。
+- `Start` 不能把 bind 错误藏在 goroutine 里。
+- `Close` 可以重复调用，负责关闭 listener、metrics/control HTTP server、ECH pool、active sessions，并等待 goroutine 退出到 timeout。
+- `Wait` 返回运行期 fatal error。CLI 用它阻塞，GUI sidecar 也可以用它决定退出码。
+- `Status` 返回不可变快照，不暴露 live map/slice 指针。
 
-```text
-cmd/x-tunnel
-  parse flags
-  load config file
-  call core.New(...)
-  install OS signal handler
-  print logs/errors
+第一版不承诺 `Reload`。原因很简单：当前 listener、TLS/mTLS、ECH、front proxy、连接池、token 都交织在 globals 和 goroutine 里，假装能热重载比直接重启更危险。
+
+## CLI 适配器
+
+CLI 继续负责：
+
+- 解析 flags。
+- 读取 config path。
+- 合并显式 flags 和 JSON。
+- 处理 `-version`。
+- 安装 OS signal。
+- 把日志写到终端。
+- 把错误转换成 exit code。
+
+核心不再做：
+
+- `flag.Parse()`。
+- `os.Exit()`。
+- `log.Fatal` / `log.Fatalf`。
+- `signal.NotifyContext`。
+- 直接读写 stdout/stderr。
+
+这样现有命令仍然长这样：
+
+```bash
+./x-tunnel -config ./client.json
 ```
 
-The core must not parse flags, read process signals, call `os.Exit`, or call
-`log.Fatal`.
+未来 GUI sidecar 只是在原有命令上加控制参数，而不是马上引入子命令系统：
 
-## Package Layout
-
-Recommended end state:
-
-```text
-cmd/x-tunnel
-  CLI adapter only
-
-pkg/core
-  public lifecycle API for GUI clients
-
-internal/runtime
-  client/server orchestration, listener lifecycle, ECH pool, metrics collectors
-
-internal/config
-  JSON config schema, defaults, validation, CLI-to-config merge helpers
-
-internal/proxy
-  local SOCKS5, HTTP, and TCP forward listeners
-
-internal/transport
-  WebSocket, TLS, ECH, smux pool, WebSocket front proxy dialers
-
-internal/wire
-  protocol frames, unchanged unless protocol changes
-
-internal/netaddr
-  address validation, unchanged
-
-internal/control
-  local HTTP/named-pipe control API, auth middleware, log streaming, reload
-
-internal/events
-  event model, ring buffer, redaction helpers, subscriber fanout
+```bash
+./x-tunnel \
+  -config ./client.json \
+  -control 127.0.0.1:0 \
+  -ready-file ./x-tunnel-ready.json
 ```
 
-If the GUI is definitely not written in Go, `pkg/core` can initially be delayed,
-but the same lifecycle must still exist internally so a daemon/control API can
-use it cleanly.
+不建议第一版做 `x-tunnel daemon ...`，因为当前项目还没有 cobra/subcommand 体系。强行引入子命令会把 CLI 迁移和 core 迁移混在一起。
 
-## Migration Order
+## Sidecar 合同
 
-1. Freeze the current CLI behavior with tests before moving code.
-   - Add focused tests for config parsing, bind failures, metrics output,
-     server/client startup validation, and log redaction for secret fields.
-   - These tests protect existing CLI users while internals are made
-     instantiable.
+GUI 启动 sidecar 后只依赖 ready file 和控制 API。
 
-2. Add a lifecycle boundary before moving files.
-   - Introduce `Engine`, `Config`, `RuntimeOptions`, `Start`, `Close`,
-     `Snapshot`, and `Validate`.
-   - Keep implementation inside `internal/app` first if needed, then move once
-     tests are stable.
-
-3. Split CLI parsing from pure config loading.
-   - Move flag definitions out of package `init`.
-   - Add `LoadJSON`, `ApplyDefaults`, `Validate`, and `MergeCLI`.
-   - `loadConfigFile` should return a config object; it should not mutate
-     package variables.
-   - Preserve existing JSON aliases, but mark the canonical field names in docs.
-
-4. Replace global config with runtime-owned fields.
-   - Move values such as token, fallback, IP strategy, timeout config, SOCKS5
-     upstream, target policy, WebSocket front proxy config, and listener list
-     into `Config` / `Engine`.
-   - Keep process-wide counters only if they are truly process-wide; otherwise
-     make them engine metrics.
-   - Move `serverSessions`, `serverNonceCache`, `echPool`, channel RTT/caps,
-     and UDP association counters under the engine.
-
-5. Make all listener/server start functions return errors.
-   - Replace `log.Fatalf` in server, SOCKS5, HTTP, and TCP listener startup with
-     returned errors.
-   - `Start` should fail if a configured listener cannot bind.
-   - Use explicit listener objects with `Start`, `Close`, `Addr`, and `Snapshot`.
-
-6. Separate logs and events from the standard logger.
-   - Define a small logger/event interface.
-   - CLI can adapt it to `log.Printf`.
-   - GUI can subscribe and render logs without scraping stdout.
-   - Sensitive front-proxy headers such as `X-T5-Auth` must never be emitted in
-     logs or GUI events.
-
-7. Add config validation and formatting APIs.
-   - Mirror sing-box style: `CheckConfig`, `FormatConfig`, and `LoadJSON`.
-   - GUI can validate profiles before applying them.
-
-8. Add a control API for non-Go GUIs.
-   - Prefer a local-only HTTP API on loopback for portability.
-   - Prefer Unix domain sockets / Windows named pipes when the GUI framework can
-     use them.
-   - Guard every mutating endpoint with a random token.
-   - Expose status, logs, metrics, config check, reload, stop, and version.
-   - Do not expose it remotely by default.
-
-9. Add sidecar mode.
-   - Add `x-tunnel daemon --config <path> --control 127.0.0.1:0`.
-   - Emit a single ready JSON line to stdout or a `--ready-file` after the
-     control API is listening.
-   - Keep normal CLI mode unchanged for existing users.
-
-10. Only then split packages.
-   - Moving code before lifecycle cleanup will mostly move globals around.
-   - First make the runtime instantiable; package movement becomes mechanical.
-
-11. Promote a public Go package.
-   - Export only stable lifecycle/config/status types.
-   - Do not export `smux`, `websocket`, listener internals, or mutable maps.
-   - Add examples that start an engine, subscribe to events, validate config,
-     and close cleanly.
-
-## GUI Control API Draft
-
-Minimum endpoints for a sidecar core:
-
-```text
-GET  /v1/version
-GET  /v1/health
-GET  /v1/status
-GET  /v1/metrics
-GET  /v1/events/stream
-GET  /v1/logs/stream
-POST /v1/config/check
-POST /v1/config/format
-POST /v1/config/reload-plan
-POST /v1/config/reload
-POST /v1/runtime/stop
-```
-
-Status should include:
-
-- mode: client or server
-- local listeners and actual bound addresses
-- tunnel channel count and per-channel RTT
-- WebSocket front proxy enabled/type/server, without custom header values
-- active streams and UDP associations
-- last error per listener/channel
-- uptime and version metadata
-- config hash and whether the running config differs from the pending profile
-
-Control API security rules:
-
-- Bind to `127.0.0.1` by default. Remote bind requires an explicit
-  `--control-allow-remote` style option.
-- Generate a high-entropy token by default and pass it to the GUI through a
-  protected ready file, environment variable, or parent process pipe.
-- Use `Authorization: Bearer <token>` for HTTP. If browser WebSocket/EventSource
-  limitations force a query token, allow it only on loopback and never log the
-  URL query.
-- Use constant-time token comparison.
-- Restrict CORS by default. `*` is convenient for dashboards but unsafe when the
-  token is available to browser code.
-- Do not add an API that reads arbitrary config paths from user input unless it
-  is restricted to explicit profile directories. Prefer payload-based
-  validation/reload.
-- Return redacted config/status by default; add an explicit local-only debug
-  mode for raw diagnostics.
-
-## Reload Strategy
-
-Start with an honest reload model:
-
-```text
-In-place reload:
-  log level
-  target allow/deny policy
-  source CIDR policy
-  selected profile metadata
-  soft numeric limits that do not resize existing pools
-
-Restart-required reload:
-  listener address or protocol changes
-  token/auth material
-  TLS/mTLS cert/key/CA changes
-  ws vs wss changes
-  fallback/ECH/DNS lookup changes
-  WebSocket front proxy changes
-  connection count / target IP list
-  metrics/control API bind address
-```
-
-`ReloadPlan` should tell the GUI whether applying a profile will be in-place,
-restart-required, or invalid. For restart-required changes, sidecar GUIs can
-validate the config, stop the old engine, then start a new engine. Later,
-x-tunnel can add listener handoff or per-component restarts where the tests
-prove it is safe.
-
-## Event And Snapshot Model
-
-Events are for timelines; snapshots are for current state.
-
-Event examples:
-
-```text
-runtime.started
-runtime.stopped
-listener.started
-listener.failed
-channel.connected
-channel.disconnected
-stream.opened
-stream.closed
-config.reload_started
-config.reload_finished
-security.auth_failed
-```
-
-Each event should include:
-
-- timestamp
-- level
-- component
-- stable event name
-- engine id
-- optional listener/channel/stream id
-- message
-- redacted fields map
-- error code and error text, when applicable
-
-Snapshots should be immutable value objects assembled on demand. They must not
-return pointers to live runtime maps or slices.
-
-## Sidecar Contract
-
-A GUI that does not link Go code should treat x-tunnel like a supervised core:
-
-```text
-x-tunnel daemon \
-  --config C:\path\profile.json \
-  --control 127.0.0.1:0 \
-  --ready-file C:\path\x-tunnel-ready.json
-```
-
-Ready file shape:
+Ready file：
 
 ```json
 {
   "pid": 12345,
   "version": "dev",
+  "commit": "unknown",
   "control_url": "http://127.0.0.1:43125",
-  "token_file": "C:\\path\\x-tunnel-token",
+  "token_file": "/Users/me/Library/Application Support/x-tunnel/token",
   "started_at": "2026-05-17T00:00:00Z"
 }
 ```
 
-Sidecar rules:
+规则：
 
-- stdout/stderr remain diagnostic only. GUI automation should use the ready
-  file and control API.
-- Exit code `0` means clean stop. Startup config errors and bind failures get
-  distinct non-zero exit codes.
-- The sidecar should handle parent-process death where the platform supports it.
-- On Windows, named pipe control should be considered after loopback HTTP works.
+- `-control 127.0.0.1:0` 表示自动选择 loopback 空闲端口。
+- ready file 只能在 control API 成功 bind 后写出。
+- token 写入单独文件，权限尽量收紧到 owner-only。ready file 只引用 token 文件路径，不直接写 token。
+- stdout/stderr 只给人看，不作为 GUI 协议。
+- sidecar 收到 `/v1/runtime/stop` 或 OS signal 后优雅退出。
+- 配置错误、端口占用、运行期异常使用不同 exit code，方便 GUI 展示原因。
 
-## Test And Acceptance Checklist
+## 最小控制 API
 
-- `Start` returns an error on occupied ports and never calls `os.Exit` or
-  `log.Fatal`.
-- `Close` is idempotent and releases listeners, metrics, and control API ports.
-- Two client engines can run in the same process with different listeners and do
-  not share counters, sessions, logs, or config.
-- Config load/validate/format functions are pure and can run without starting
-  network listeners.
-- CLI flags override config files exactly as they do today.
-- Control API rejects missing or wrong bearer tokens.
-- Log and status APIs redact token, password, private key material, and
-  front-proxy header values.
-- `ReloadPlan` correctly marks restart-required changes.
-- Event subscribers cannot block the runtime; slow subscribers drop or backfill
-  from a bounded ring buffer.
-- Race tests pass around start/close/reload/event subscription.
-- Existing integration tests still pass through the CLI adapter.
+第一阶段只做这些：
 
-## Design Rules
+```text
+GET  /v1/version
+GET  /v1/health
+GET  /v1/status
+GET  /v1/logs
+GET  /v1/metrics
+POST /v1/config/check
+POST /v1/config/format
+POST /v1/runtime/stop
+```
 
-- CLI owns flags, terminal output, exit codes, and OS signals.
-- Core owns listeners, sessions, tunnel channels, metrics, and validation.
-- Core returns errors; it does not terminate the process.
-- Runtime state belongs to an `Engine`, not package globals.
-- Logs are events; stdout/stderr is only one possible sink.
-- Config input should be structured. CLI shorthand can compile into the same
-  structured config used by GUI profiles.
-- Client transport features such as ECH, fallback TLS, IP override, and
-  WebSocket front proxy should compose below the x-tunnel v2/smux protocol layer.
-- Public APIs should expose stable concepts, not implementation packages.
-- GUI-facing APIs must be conservative about secrets, paths, and remote access.
-- Prefer an explicit `RestartRequired` result over pretending every setting can
-  be safely hot-reloaded.
+先不做：
 
-This gives x-tunnel the same basic shape as Xray and sing-box, while keeping a
-Clash-like control API available for GUI clients that should not link Go code
-directly.
+```text
+POST /v1/config/reload
+POST /v1/config/reload-plan
+GET  /v1/events/stream
+GET  /v1/logs/stream
+```
+
+理由：
+
+- GUI 第一版可以用轮询 `status` + `logs`，不需要马上做 SSE/WebSocket 日志流。
+- profile 切换可以重启 sidecar，暂不需要 reload。
+- 如果一开始把 reload 做进 API，就会被迫处理 listener handoff、TLS 证书替换、ECH 刷新、连接池缩放、token 替换等高风险路径。
+
+`/v1/status` 至少包含：
+
+- mode: client/server。
+- uptime、version、config hash。
+- listeners: 配置地址、实际绑定地址、协议、状态、last error。
+- client: forward URL 的脱敏版本、channel 数、RTT、capabilities、fallback/ECH 状态。
+- server: sessions、channels、active streams、source/target policy 摘要。
+- metrics address。
+- last fatal error。
+
+`/v1/logs` 返回最近 N 条 ring buffer 日志：
+
+```json
+{
+  "entries": [
+    {
+      "time": "2026-05-17T00:00:00Z",
+      "level": "info",
+      "component": "client",
+      "message": "SOCKS5 proxy started",
+      "fields": {
+        "addr": "127.0.0.1:11080"
+      }
+    }
+  ]
+}
+```
+
+第一版如果还没有结构化日志，也可以先把 `message` 作为主字段；关键是进入 bounded ring buffer，GUI 不再解析 stdout。
+
+## 控制 API 安全
+
+- 默认只允许 `127.0.0.1` / `::1`。
+- 远程监听必须显式打开，例如未来的 `-control-allow-remote`，第一阶段可以先不提供。
+- 所有非 health/version 请求都要求 `Authorization: Bearer <token>`。
+- token 比较使用 constant-time compare。
+- 不把 token 放进 URL query；如果以后要支持浏览器 WebSocket 限制，只允许 loopback query token，并且绝不记录完整 URL。
+- CORS 默认关闭或只允许 GUI 指定 origin。不要默认 `*`。
+- 控制 API 不接收“任意 path 并读取配置文件”。`config/check` 和 `config/format` 只接收 payload，避免 GUI/网页把 sidecar 变成本地文件读取器。
+- status、logs、metrics 默认脱敏：`token`、proxy password、private key、mTLS key、front-proxy custom headers 不能出现。
+
+## 配置策略
+
+保持现有 JSON schema 作为第一版 GUI profile 格式，不急着发明一套全新的 nested schema。
+
+当前 CLI 已经支持：
+
+- `listen`
+- `forward`
+- `token`
+- TLS/mTLS 文件
+- target/source policy
+- ECH/fallback/DNS
+- timeouts
+- metrics
+- `websocket_front_proxy`
+
+GUI 第一版可以直接编辑这些字段。代码侧要做的是把现有“加载 JSON 后写 globals”改成：
+
+```text
+raw JSON
+  -> decode FileConfig
+  -> apply defaults
+  -> apply CLI overrides
+  -> normalize aliases
+  -> validate
+  -> RuntimeConfig
+```
+
+兼容规则：
+
+- 继续接受现有 hyphen/underscore alias。
+- 显式 CLI flags 继续覆盖 config file。
+- `CheckConfigJSON` 不启动 listener，不做网络 ECH 查询，不拨号。
+- `FormatConfigJSON` 只做缩进和字段归一化；JSON 本身没有注释，因此不要承诺保留注释。
+- 涉密字段在 status/logs 里统一 redacted。
+
+## 迁移顺序
+
+### 阶段 1：先切生命周期
+
+目标：不改用户行为，只让运行时不再杀进程。
+
+- 增加 `RuntimeConfig`，把 `validateStartupConfig` 的结果和运行参数集中起来。
+- 把 `loadConfigFile` 改成返回配置对象，避免直接写 package globals。
+- 把 `runWebSocketServer`、`runSOCKS5Listener`、`runHTTPListener`、`runTCPListener` 改成返回 error，启动成功后再进入 accept loop。
+- 引入 `Engine.Start/Close/Wait/Status`。
+- CLI adapter 捕获 error 并决定日志/exit code。
+
+验收：
+
+- 端口占用时 `Start` 返回 error，不 `log.Fatal`。
+- `Close` 可重复调用并释放端口。
+- 现有 CLI 集成测试仍通过。
+- 本地 server/client smoke test 仍能走 SOCKS5 和 TCP forward。
+
+### 阶段 2：加 sidecar 控制面
+
+目标：GUI 可以可靠启动、检查、停止。
+
+- 增加 `-control`、`-ready-file`、`-control-token-file`。
+- 实现最小控制 API。
+- 增加 bounded log ring。
+- 写 ready file 前确保 control API 已 bind。
+- `/v1/config/check` 和 `/v1/config/format` 接收 payload。
+
+验收：
+
+- GUI/脚本能启动 sidecar，读取 ready file，调用 `/v1/health`。
+- bearer token 错误时返回 401。
+- `/v1/status` 不泄露 token/password/private key/header value。
+- `/v1/runtime/stop` 能优雅退出并释放监听端口。
+
+### 阶段 3：清理 globals
+
+目标：让内部 Engine 真正拥有状态。
+
+- `echPool` 移到 Engine。
+- server sessions、nonce cache 移到 Engine。
+- metrics counters 移到 Engine 或显式 collector。
+- target policy、SOCKS5 upstream、IP strategy、timeouts 从 package globals 改为 Engine fields。
+- listener 对象持有自己的 `net.Listener` / `http.Server`。
+
+验收：
+
+- race test 覆盖 start/close/status/logs。
+- metrics/status 来自同一份 Engine 状态。
+- 核心代码路径不依赖 package-level mutable runtime state。
+
+### 阶段 4：再决定公开 Go API
+
+只有当确实要写 Go GUI 或被第三方 Go 程序 import 时，才新增 `pkg/core`。
+
+那时公开的 API 也应该很小：
+
+```go
+package core
+
+type Engine struct {
+	// wrapper around internal/app engine
+}
+
+func CheckConfigJSON(raw []byte) error
+func FormatConfigJSON(raw []byte) ([]byte, error)
+func New(config Config, options Options) (*Engine, error)
+func (e *Engine) Start(ctx context.Context) error
+func (e *Engine) Close(ctx context.Context) error
+func (e *Engine) Status() Status
+func (e *Engine) Done() <-chan struct{}
+```
+
+不要公开 smux、websocket、listener 内部对象、mutable maps。公开 API 一旦发布就很难改，sidecar 合同更适合作为第一版 GUI 边界。
+
+## 后续热重载原则
+
+第一版没有热重载。以后如果要做，只从低风险字段开始：
+
+可考虑 in-place：
+
+- log level。
+- source CIDR / target allow-deny policy。
+- 部分软限制。
+- GUI profile metadata。
+
+继续 restart-required：
+
+- listener 地址或协议。
+- token/auth material。
+- TLS/mTLS cert/key/CA。
+- ws/wss 切换。
+- ECH/fallback/DNS/front proxy。
+- connection count / target IP list。
+- metrics/control bind address。
+
+规则：没有测试证明能安全迁移的字段，都当 restart-required。
+
+## 接受标准
+
+- `go test ./...` 通过。
+- `go test -race ./internal/app` 至少覆盖 Engine start/close/control/status 的核心路径。
+- 端口占用、配置错误、认证失败都返回结构化 error，而不是进程内部 `fatal`。
+- 现有 CLI 参数和 JSON 兼容性保持。
+- sidecar ready file 只在真正 ready 后写出。
+- control API token、CORS、loopback 限制有测试。
+- 日志和状态脱敏有测试。
+- 真实本地连通性测试仍通过：server + client + SOCKS5 fetch + TCP forward。
+
+## 为什么这个方案更适合现在
+
+原方案方向没有错，但第一步拉得太满：`pkg/core`、`internal/runtime`、`internal/control`、`internal/events`、reload plan、named pipe、多实例语义都同时出现，会让重构看起来像架构升级，实际最难的 `log.Fatal`、globals、listener bind readiness、config pure functions 反而容易被淹没。
+
+这版方案把顺序调回来：
+
+1. 先让 core 能被启动和关闭。
+2. 再让 GUI 能通过 sidecar 控制它。
+3. 再逐步把 globals 收进 Engine。
+4. 最后才公开 Go API 或做热重载。
+
+它仍然借鉴 Xray 的 lifecycle、sing-box 的 sidecar/library 共用核心、Clash 的 GUI controller，但不会在 x-tunnel 还没脱离 CLI globals 前过早承诺一个很重的公共内核架构。
