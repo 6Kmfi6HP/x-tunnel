@@ -9,7 +9,8 @@ direction for future x-tunnel changes.
   existing `-ldflags -X main.buildVersion=...` release commands keep working.
 - `internal/app`: runtime orchestration for client and server modes. This layer
   owns flags, JSON config loading, signal handling, local listeners, server
-  session registry, smux lifecycle, metrics wiring, TLS/ECH setup, and logging.
+  session registry, smux lifecycle, metrics wiring, TLS/ECH setup, WebSocket
+  front proxy dialing, and logging.
 - `internal/wire`: byte-level x-tunnel protocol encoding and decoding. This
   includes smux open headers, v2 ChannelInit/Accept/Reject control frames,
   TCP/UDP open status frames, UDP chunks, and full-write helpers.
