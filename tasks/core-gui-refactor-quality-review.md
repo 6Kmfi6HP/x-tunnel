@@ -6,7 +6,7 @@ Scope: current working tree against `docs/core-gui-refactor.md`
 ## Summary
 
 - Verdict: Ready for release after commit, push, and tag.
-- Release version planned: `v0.4.0`.
+- Release version planned: `v0.4.1`.
 - Triage:
   - Docs-only: no.
   - React/Next perf review: no.
@@ -34,6 +34,7 @@ Scope: current working tree against `docs/core-gui-refactor.md`
 - `RuntimeOptions.Logger` was defined but unused. The log ring now also forwards complete log lines to the supplied logger.
 - CI fuzz smoke referenced non-existent `FuzzReadProtocolHello`. It now uses existing `FuzzReadSmuxOpenHeader`.
 - README did not document the sidecar control API. It now documents sidecar flags, ready/token behavior, and endpoints.
+- GitHub Actions `main` race gate exposed shutdown listeners reading package-level `cfg` while config tests rewrote globals. HTTP listener shutdown now uses the runtime config's captured shutdown timeout.
 
 ## Residual Deferrals
 
@@ -53,4 +54,7 @@ Scope: current working tree against `docs/core-gui-refactor.md`
 - `OUT=/tmp/x-tunnel-core-gui-build VERSION=v0.4.0 ... ./scripts/build.sh && /tmp/x-tunnel-core-gui-build -version`: passed.
 - `TARGETS='linux/amd64' DIST=/tmp/x-tunnel-release-v040-smoke VERSION=v0.4.0 ... ./scripts/release.sh`: passed and wrote `SHA256SUMS`.
 - Real local smoke: server + client sidecars, ready files, token auth, status/logs, SOCKS5 payload, TCP-forward payload, runtime stop, and external `https://example.com/` through SOCKS5 returned `HTTP/2 200`.
+- `go test -race -count=10 -run 'TestControlAPIReadyAuthStatusAndStop|TestLoadConfigFileAppliesWebSocketFrontProxy' ./internal/app`: passed after the shutdown-timeout fix.
+- `TARGETS='linux/amd64' DIST=/tmp/x-tunnel-release-v041-smoke VERSION=v0.4.1 ... ./scripts/release.sh`: passed and wrote `SHA256SUMS`.
+- `v0.4.1` real local smoke: server + client sidecars, ready files, token auth, status, SOCKS5 payload, TCP-forward payload, and runtime stop passed.
 - Docker local smoke: skipped because Docker daemon was not running locally.

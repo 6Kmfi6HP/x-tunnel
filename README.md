@@ -15,7 +15,7 @@ Build metadata can be injected with `-ldflags`:
 
 ```bash
 go build -ldflags "\
-  -X main.buildVersion=0.4.0 \
+  -X main.buildVersion=0.4.1 \
   -X main.buildCommit=$(git rev-parse --short HEAD) \
   -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o x-tunnel ./cmd/x-tunnel
@@ -24,14 +24,14 @@ go build -ldflags "\
 Or use the build script:
 
 ```bash
-VERSION=0.4.0 OUT=./x-tunnel ./scripts/build.sh
+VERSION=0.4.1 OUT=./x-tunnel ./scripts/build.sh
 ./x-tunnel -version
 ```
 
 Create cross-platform release artifacts:
 
 ```bash
-VERSION=0.4.0 ./scripts/release.sh
+VERSION=0.4.1 ./scripts/release.sh
 cat dist/SHA256SUMS
 ```
 
@@ -47,14 +47,14 @@ docker run --rm x-tunnel:local -version
 Tagged releases publish multi-architecture images to GHCR:
 
 ```bash
-docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.4.0
-docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.4.0 -version
+docker pull ghcr.io/6kmfi6hp/x-tunnel:v0.4.1
+docker run --rm ghcr.io/6kmfi6hp/x-tunnel:v0.4.1 -version
 ```
 
 Run a loopback-only server in a container:
 
 ```bash
-docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.4.0 \
+docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.4.1 \
   -l ws://0.0.0.0:18080/tunnel \
   -token local-test-token \
   -cidr 127.0.0.1/32
@@ -65,8 +65,8 @@ docker run --rm -p 127.0.0.1:18080:18080 ghcr.io/6kmfi6hp/x-tunnel:v0.4.0 \
 Push a version tag to publish GitHub Release assets and GHCR images:
 
 ```bash
-git tag v0.4.0
-git push origin v0.4.0
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 The release workflow verifies formatting, `go vet`, tests, race tests, and a

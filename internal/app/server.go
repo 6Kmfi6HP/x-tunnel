@@ -216,7 +216,7 @@ func generateSelfSignedCert() (tls.Certificate, error) {
 	)
 }
 
-func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet, onFatal func(error)) (*runtimeListener, error) {
+func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet, shutdownTimeout time.Duration, onFatal func(error)) (*runtimeListener, error) {
 	u, err := url.Parse(addr)
 	if err != nil {
 		return nil, fmt.Errorf("[服务端] WS 地址无效: %w", err)
@@ -285,7 +285,7 @@ func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.I
 	}
 	actual := u.Scheme + "://" + ln.Addr().String() + path
 	listener := newRuntimeListener(u.Scheme, addr, actual, func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	})
@@ -322,7 +322,7 @@ func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.I
 }
 
 func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet) error {
-	listener, err := startWebSocketServer(ctx, addr, allowedNets, nil)
+	listener, err := startWebSocketServer(ctx, addr, allowedNets, cfg.ShutdownTimeout, nil)
 	if err != nil {
 		return err
 	}
@@ -339,7 +339,7 @@ func shutdownHTTPServer(ctx context.Context, server *http.Server, timeout time.D
 	}
 }
 
-func startMetricsServer(ctx context.Context, addr string) (*runtimeListener, error) {
+func startMetricsServer(ctx context.Context, addr string, shutdownTimeout time.Duration) (*runtimeListener, error) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4")
@@ -351,7 +351,7 @@ func startMetricsServer(ctx context.Context, addr string) (*runtimeListener, err
 		return nil, err
 	}
 	listener := newRuntimeListener("metrics", addr, "http://"+ln.Addr().String()+"/metrics", func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 		defer cancel()
 		return server.Shutdown(shutdownCtx)
 	})
@@ -373,7 +373,7 @@ func startMetricsServer(ctx context.Context, addr string) (*runtimeListener, err
 }
 
 func runMetricsServer(ctx context.Context, addr string) {
-	listener, err := startMetricsServer(ctx, addr)
+	listener, err := startMetricsServer(ctx, addr, cfg.ShutdownTimeout)
 	if err != nil {
 		log.Printf("[metrics] HTTP 启动失败: %v", err)
 		return

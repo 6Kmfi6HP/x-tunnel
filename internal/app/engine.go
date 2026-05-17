@@ -142,7 +142,7 @@ func (e *Engine) startRuntime() error {
 	}
 
 	if e.config.values.MetricsAddr != "" {
-		metrics, err := startMetricsServer(e.ctx, e.config.values.MetricsAddr)
+		metrics, err := startMetricsServer(e.ctx, e.config.values.MetricsAddr, e.config.values.Global.ShutdownTimeout)
 		if err != nil {
 			return fmt.Errorf("listen.bind_failed: metrics: %w", err)
 		}
@@ -164,7 +164,7 @@ func (e *Engine) startRuntime() error {
 		} else {
 			log.Printf("[服务端] 直连模式（未配置SOCKS5代理）")
 		}
-		server, err := startWebSocketServer(e.ctx, startup.ServerListen, startup.SourceCIDRs, e.reportFatal)
+		server, err := startWebSocketServer(e.ctx, startup.ServerListen, startup.SourceCIDRs, e.config.values.Global.ShutdownTimeout, e.reportFatal)
 		if err != nil {
 			return fmt.Errorf("listen.bind_failed: server: %w", err)
 		}
