@@ -1,4 +1,5 @@
 /dist/
+/build/
 /x-tunnel
 /coverage.out
 *.test

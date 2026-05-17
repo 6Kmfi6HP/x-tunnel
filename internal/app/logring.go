@@ -10,6 +10,7 @@ import (
 )
 
 type LogEntry struct {
+	ID        uint64            `json:"id"`
 	Time      time.Time         `json:"time"`
 	Level     string            `json:"level"`
 	Component string            `json:"component,omitempty"`
@@ -22,6 +23,7 @@ type LogRing struct {
 	entries []LogEntry
 	next    int
 	full    bool
+	seq     uint64
 }
 
 func NewLogRing(limit int) *LogRing {
@@ -39,7 +41,10 @@ func (r *LogRing) Add(message string) {
 	if message == "" {
 		return
 	}
+	r.mu.Lock()
+	r.seq++
 	entry := LogEntry{
+		ID:      r.seq,
 		Time:    time.Now().UTC(),
 		Level:   "info",
 		Message: redactConfigValue(message),
@@ -49,7 +54,6 @@ func (r *LogRing) Add(message string) {
 			entry.Component = entry.Message[1:end]
 		}
 	}
-	r.mu.Lock()
 	r.entries[r.next] = entry
 	r.next = (r.next + 1) % len(r.entries)
 	if r.next == 0 {
@@ -78,6 +82,32 @@ func (r *LogRing) Entries(limit int) []LogEntry {
 	for i := first; i < count; i++ {
 		idx := (start + i) % len(r.entries)
 		out = append(out, r.entries[idx])
+	}
+	return out
+}
+
+func (r *LogRing) EntriesSince(after uint64, limit int) []LogEntry {
+	if r == nil {
+		return nil
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	count := r.next
+	start := 0
+	if r.full {
+		count = len(r.entries)
+		start = r.next
+	}
+	out := make([]LogEntry, 0, count)
+	for i := 0; i < count; i++ {
+		idx := (start + i) % len(r.entries)
+		entry := r.entries[idx]
+		if entry.ID > after {
+			out = append(out, entry)
+		}
+	}
+	if limit > 0 && len(out) > limit {
+		out = out[len(out)-limit:]
 	}
 	return out
 }

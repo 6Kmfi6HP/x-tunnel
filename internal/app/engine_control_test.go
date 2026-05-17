@@ -295,6 +295,9 @@ func TestControlAPIReadyAuthStatusAndStop(t *testing.T) {
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"version":"control-test"`) {
 		t.Fatalf("version status=%d body=%s", resp.StatusCode, body)
 	}
+	if !strings.Contains(body, `"control_api_version":1`) || !strings.Contains(body, `"stats"`) {
+		t.Fatalf("version body missing control discovery fields: %s", body)
+	}
 	resp, _ = controlRequest(t, client, http.MethodGet, ready.ControlURL+"/v1/status", "wrong-token", nil)
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("wrong token status = %d, want 401", resp.StatusCode)
@@ -316,6 +319,10 @@ func TestControlAPIReadyAuthStatusAndStop(t *testing.T) {
 	resp, body = controlRequest(t, client, http.MethodGet, ready.ControlURL+"/v1/metrics", bearer, nil)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(body, "x_tunnel_server_sessions") {
 		t.Fatalf("metrics status=%d body=%s", resp.StatusCode, body)
+	}
+	resp, body = controlRequest(t, client, http.MethodGet, ready.ControlURL+"/v1/stats", bearer, nil)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(body, `"counters"`) || !strings.Contains(body, `"server"`) {
+		t.Fatalf("stats status=%d body=%s", resp.StatusCode, body)
 	}
 
 	checkPayload := strings.NewReader(`{"listen":"socks5://127.0.0.1:1","forward":"ws://127.0.0.1:1/tunnel","connections":1}`)

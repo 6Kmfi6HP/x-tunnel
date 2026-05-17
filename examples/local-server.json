@@ -2,8 +2,6 @@
   "listen": "ws://127.0.0.1:18080/tunnel",
   "token": "local-test-token",
   "cidr": "127.0.0.1/32",
-  "allow-target": "127.0.0.0/8",
-  "allow-host": "localhost",
   "metrics": "127.0.0.1:19090",
   "max_clients": 8,
   "max_streams": 64,

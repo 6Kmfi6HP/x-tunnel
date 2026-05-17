@@ -160,6 +160,7 @@ Metrics include:
 - UDP counters/gauges: total and active SOCKS5 UDP associations.
 - Client counters: reconnects, protocol negotiation outcomes, and RTT probe failures.
 - Client channel gauges: `x_tunnel_client_channel_up{channel="N"}`, `x_tunnel_client_channel_rtt_seconds{channel="N"}`, and `x_tunnel_client_channel_capabilities{channel="N"}`.
+- Runtime counters: `x_tunnel_runtime_bytes_sent_total` and `x_tunnel_runtime_bytes_received_total`.
 
 ## Sidecar Control API
 
@@ -184,18 +185,39 @@ Unauthenticated endpoints:
 - `GET /v1/version`
 - `GET /v1/health`
 
+`/v1/version` includes build metadata, `control_api_version`, and a capability
+list so GUI clients can check compatibility before connecting user workflows to
+the sidecar.
+
 Authenticated endpoints use `Authorization: Bearer <token>`:
 
 - `GET /v1/status`
 - `GET /v1/logs`
+- `GET /v1/logs/stream`
 - `GET /v1/metrics`
+- `GET /v1/stats`
 - `POST /v1/config/check`
 - `POST /v1/config/format`
 - `POST /v1/runtime/stop`
 
-`/v1/config/check` and `/v1/config/format` accept JSON payloads; they do not
-read arbitrary local file paths. Status and logs redact URL userinfo and do not
-include the runtime token or control token.
+`/v1/logs/stream` is an SSE stream of log-ring entries. `/v1/stats` returns JSON
+traffic counters, listener status, client/server state, and machine-readable
+counters for dashboards. Control API errors use a stable JSON shape:
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "config.invalid",
+    "message": "invalid config",
+    "field": "listen"
+  }
+}
+```
+
+`/v1/config/check` and `/v1/config/format` accept JSON payloads; they do not read
+arbitrary local file paths. Status and logs redact URL userinfo and do not include
+the runtime token or control token.
 
 ## Config File
 
@@ -226,6 +248,16 @@ See [examples](examples) for local, hardened server, WSS mTLS, and WebSocket fro
 ```bash
 ./x-tunnel -config ./client.json
 ```
+
+For GUI clients and CI checks that need validation before starting a listener,
+the same config parser is available offline:
+
+```bash
+./x-tunnel -check-config ./client.json
+./x-tunnel -format-config ./client.json
+```
+
+Use `-` as the path to read JSON from stdin.
 
 Operational timeouts can be tuned with duration flags such as `-dial-timeout`,
 `-ws-handshake-timeout`, `-reconnect-delay`, `-auth-skew`,

@@ -34,6 +34,15 @@ func TestValidateListenHostPortAllowsEmptyHost(t *testing.T) {
 	}
 }
 
+func TestValidateListenHostPortAllowZero(t *testing.T) {
+	if err := ValidateListenHostPortAllowZero("127.0.0.1:0"); err != nil {
+		t.Fatalf("ValidateListenHostPortAllowZero rejected port 0: %v", err)
+	}
+	if err := ValidateListenHostPort("127.0.0.1:0"); err == nil {
+		t.Fatal("ValidateListenHostPort accepted port 0")
+	}
+}
+
 func TestHostnameHelpers(t *testing.T) {
 	if got := NormalizeTargetHost("Example.COM."); got != "example.com" {
 		t.Fatalf("NormalizeTargetHost = %q", got)

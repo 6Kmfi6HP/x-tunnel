@@ -149,6 +149,8 @@ var (
 	controlAddr         string
 	readyFile           string
 	controlTokenFile    string
+	checkConfigFile     string
+	formatConfigFile    string
 
 	dnsServer string
 	echDomain string
@@ -184,6 +186,8 @@ var (
 	clientProtocolOKSeq        uint64
 	clientProtocolFailureSeq   uint64
 	clientRTTProbeFailureSeq   uint64
+	runtimeBytesSentSeq        uint64
+	runtimeBytesReceivedSeq    uint64
 )
 
 var (
@@ -243,6 +247,8 @@ func init() {
 	flag.StringVar(&controlAddr, "control", "", "可选本地控制 API 监听地址，如 127.0.0.1:0")
 	flag.StringVar(&readyFile, "ready-file", "", "可选 sidecar ready JSON 文件路径，需配合 -control 使用")
 	flag.StringVar(&controlTokenFile, "control-token-file", "", "可选控制 API bearer token 文件路径，需配合 -control 使用")
+	flag.StringVar(&checkConfigFile, "check-config", "", "离线校验 JSON 配置文件并退出；使用 - 从 stdin 读取")
+	flag.StringVar(&formatConfigFile, "format-config", "", "离线格式化 JSON 配置文件到 stdout 并退出；使用 - 从 stdin 读取")
 	flag.DurationVar(&cfg.DialTimeout, "dial-timeout", cfg.DialTimeout, "TCP/DNS 目标拨号超时时间")
 	flag.DurationVar(&cfg.WSHandshakeTimeout, "ws-handshake-timeout", cfg.WSHandshakeTimeout, "WebSocket 握手超时时间")
 	flag.DurationVar(&cfg.ReconnectDelay, "reconnect-delay", cfg.ReconnectDelay, "客户端重连初始退避时间")
@@ -848,6 +854,10 @@ func validateListenHostPort(value string) error {
 	return netaddr.ValidateListenHostPort(value)
 }
 
+func validateMetricsListenHostPort(value string) error {
+	return netaddr.ValidateListenHostPortAllowZero(value)
+}
+
 func validateHostPortValue(value string, allowEmptyHost bool) error {
 	return netaddr.ValidateHostPortValue(value, allowEmptyHost)
 }
@@ -1064,7 +1074,7 @@ func validateStartupConfigValues(values runtimeValues) (*startupConfig, error) {
 		return nil, fmt.Errorf("全局参数无效: %w", err)
 	}
 	if values.MetricsAddr != "" {
-		if err := validateListenHostPort(values.MetricsAddr); err != nil {
+		if err := validateMetricsListenHostPort(values.MetricsAddr); err != nil {
 			return nil, fmt.Errorf("metrics 地址无效: %w", err)
 		}
 	}

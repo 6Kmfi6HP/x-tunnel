@@ -15,7 +15,15 @@ func ValidateListenHostPort(value string) error {
 	return ValidateHostPortValue(value, true)
 }
 
+func ValidateListenHostPortAllowZero(value string) error {
+	return validateHostPortValue(value, true, true)
+}
+
 func ValidateHostPortValue(value string, allowEmptyHost bool) error {
+	return validateHostPortValue(value, allowEmptyHost, false)
+}
+
+func validateHostPortValue(value string, allowEmptyHost, allowZeroPort bool) error {
 	if strings.ContainsAny(value, " \t\r\n") {
 		return fmt.Errorf("host:port 不能包含空白字符")
 	}
@@ -34,7 +42,14 @@ func ValidateHostPortValue(value string, allowEmptyHost bool) error {
 	if strings.TrimSpace(port) == "" {
 		return fmt.Errorf("port 不能为空")
 	}
-	if p, err := strconv.Atoi(port); err != nil || p <= 0 || p > 65535 {
+	minPort := 1
+	if allowZeroPort {
+		minPort = 0
+	}
+	if p, err := strconv.Atoi(port); err != nil || p < minPort || p > 65535 {
+		if allowZeroPort {
+			return fmt.Errorf("port 必须在 0-65535 之间")
+		}
 		return fmt.Errorf("port 必须在 1-65535 之间")
 	}
 	return nil

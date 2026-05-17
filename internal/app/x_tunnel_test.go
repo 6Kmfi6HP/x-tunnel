@@ -1834,6 +1834,10 @@ func TestValidateStartupConfigValidModes(t *testing.T) {
 	if startup.IsServer || startup.Client.ForwardScheme != "ws" || len(startup.Listeners) != 1 || startup.IPStrategy != IPStrategyPv6Pv4 {
 		t.Fatalf("validateStartupConfig client = %#v", startup)
 	}
+	metricsAddr = "127.0.0.1:0"
+	if _, err := validateStartupConfig(); err != nil {
+		t.Fatalf("validateStartupConfig rejected ephemeral metrics port: %v", err)
+	}
 
 	listenAddr = "ws://127.0.0.1:18080/tunnel"
 	forwardAddr = ""

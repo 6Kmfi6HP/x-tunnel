@@ -208,7 +208,11 @@ func (p *ECHPool) probeChannelRTTOnce(sess *smux.Session, timeout time.Duration)
 	if !bytes.Equal(ack, payload) {
 		return 0, fmt.Errorf("ping ack mismatch")
 	}
-	return time.Since(start).Nanoseconds(), nil
+	rtt := time.Since(start).Nanoseconds()
+	if rtt <= 0 {
+		rtt = 1
+	}
+	return rtt, nil
 }
 
 func negotiateClientProtocol(sess *smux.Session, timeout time.Duration, clientID string, channelID uint32, serverAddr string) (uint64, error) {
@@ -313,11 +317,17 @@ func webSocketRequestHeader() http.Header {
 func proxyConnStream(c net.Conn, stream *smux.Stream) {
 	done := make(chan struct{}, 2)
 	go func() {
-		_, _ = io.Copy(stream, c)
+		n, _ := io.Copy(stream, c)
+		if n > 0 {
+			atomic.AddUint64(&runtimeBytesSentSeq, uint64(n))
+		}
 		done <- struct{}{}
 	}()
 	go func() {
-		_, _ = io.Copy(c, stream)
+		n, _ := io.Copy(c, stream)
+		if n > 0 {
+			atomic.AddUint64(&runtimeBytesReceivedSeq, uint64(n))
+		}
 		done <- struct{}{}
 	}()
 	<-done

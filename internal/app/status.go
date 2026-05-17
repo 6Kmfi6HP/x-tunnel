@@ -73,6 +73,43 @@ type Status struct {
 	LastFatal     string           `json:"last_fatal_error,omitempty"`
 }
 
+type TrafficStats struct {
+	BytesSent     uint64 `json:"bytes_sent"`
+	BytesReceived uint64 `json:"bytes_received"`
+}
+
+type CounterStats struct {
+	ServerStreams                       uint64 `json:"server_streams_total"`
+	UDPAssociations                     uint64 `json:"udp_associations_total"`
+	UDPAssociationsActive               uint64 `json:"udp_associations_active"`
+	ClientReconnects                    uint64 `json:"client_reconnects_total"`
+	ServerSourceRejections              uint64 `json:"server_source_rejections_total"`
+	ServerAuthRejections                uint64 `json:"server_auth_rejections_total"`
+	ServerClientSessionRejections       uint64 `json:"server_client_session_rejections_total"`
+	ServerStreamRejections              uint64 `json:"server_stream_rejections_total"`
+	ServerTargetRejections              uint64 `json:"server_target_rejections_total"`
+	ServerUnsupportedStreams            uint64 `json:"server_unsupported_streams_total"`
+	ServerProtocolNegotiations          uint64 `json:"server_protocol_negotiations_total"`
+	ServerProtocolNegotiationRejections uint64 `json:"server_protocol_negotiation_rejections_total"`
+	ServerProtocolNegotiationFailures   uint64 `json:"server_protocol_negotiation_failures_total"`
+	ServerProtocolReplayRejections      uint64 `json:"server_protocol_replay_rejections_total"`
+	ClientProtocolNegotiations          uint64 `json:"client_protocol_negotiations_total"`
+	ClientProtocolNegotiationFailures   uint64 `json:"client_protocol_negotiation_failures_total"`
+	ClientRTTProbeFailures              uint64 `json:"client_rtt_probe_failures_total"`
+}
+
+type Stats struct {
+	Timestamp     time.Time        `json:"timestamp"`
+	Mode          string           `json:"mode"`
+	StartedAt     time.Time        `json:"started_at"`
+	UptimeSeconds float64          `json:"uptime_seconds"`
+	Traffic       TrafficStats     `json:"traffic"`
+	Counters      CounterStats     `json:"counters"`
+	Listeners     []ListenerStatus `json:"listeners"`
+	Client        *ClientStatus    `json:"client,omitempty"`
+	Server        *ServerStatus    `json:"server,omitempty"`
+}
+
 func newRuntimeListener(protocol, configured, actual string, closeFn func() error) *runtimeListener {
 	return &runtimeListener{
 		Protocol:   protocol,
@@ -169,6 +206,42 @@ func (e *Engine) status() Status {
 		}
 	}
 	return status
+}
+
+func (e *Engine) Stats() Stats {
+	status := e.status()
+	return Stats{
+		Timestamp:     time.Now().UTC(),
+		Mode:          status.Mode,
+		StartedAt:     status.StartedAt,
+		UptimeSeconds: status.UptimeSeconds,
+		Traffic: TrafficStats{
+			BytesSent:     atomic.LoadUint64(&runtimeBytesSentSeq),
+			BytesReceived: atomic.LoadUint64(&runtimeBytesReceivedSeq),
+		},
+		Counters: CounterStats{
+			ServerStreams:                       atomic.LoadUint64(&serverStreamSeq),
+			UDPAssociations:                     atomic.LoadUint64(&udpAssociationSeq),
+			UDPAssociationsActive:               atomic.LoadUint64(&udpAssociationActiveSeq),
+			ClientReconnects:                    atomic.LoadUint64(&clientReconnectSeq),
+			ServerSourceRejections:              atomic.LoadUint64(&serverSourceRejectSeq),
+			ServerAuthRejections:                atomic.LoadUint64(&serverAuthRejectSeq),
+			ServerClientSessionRejections:       atomic.LoadUint64(&serverClientRejectSeq),
+			ServerStreamRejections:              atomic.LoadUint64(&serverStreamRejectSeq),
+			ServerTargetRejections:              atomic.LoadUint64(&serverTargetRejectSeq),
+			ServerUnsupportedStreams:            atomic.LoadUint64(&serverUnsupportedStreamSeq),
+			ServerProtocolNegotiations:          atomic.LoadUint64(&serverProtocolOKSeq),
+			ServerProtocolNegotiationRejections: atomic.LoadUint64(&serverProtocolRejectSeq),
+			ServerProtocolNegotiationFailures:   atomic.LoadUint64(&serverProtocolFailureSeq),
+			ServerProtocolReplayRejections:      atomic.LoadUint64(&serverProtocolReplaySeq),
+			ClientProtocolNegotiations:          atomic.LoadUint64(&clientProtocolOKSeq),
+			ClientProtocolNegotiationFailures:   atomic.LoadUint64(&clientProtocolFailureSeq),
+			ClientRTTProbeFailures:              atomic.LoadUint64(&clientRTTProbeFailureSeq),
+		},
+		Listeners: status.Listeners,
+		Client:    status.Client,
+		Server:    status.Server,
+	}
 }
 
 func summarizeTargetPolicy(policy *TargetPolicy) TargetPolicySummary {

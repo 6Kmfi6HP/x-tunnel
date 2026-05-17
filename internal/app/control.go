@@ -28,6 +28,19 @@ type controlServer struct {
 	listener  *runtimeListener
 }
 
+const controlAPIVersion = 1
+
+var controlCapabilities = []string{
+	"status",
+	"logs",
+	"logs_stream",
+	"metrics",
+	"stats",
+	"config_check",
+	"config_format",
+	"runtime_stop",
+}
+
 type readyInfo struct {
 	PID        int       `json:"pid"`
 	Version    string    `json:"version"`
@@ -61,7 +74,9 @@ func startControlServer(ctx context.Context, engine *Engine, addr, tokenFile str
 	mux.HandleFunc("/v1/health", control.handleHealth)
 	mux.Handle("/v1/status", control.requireAuth(http.HandlerFunc(control.handleStatus)))
 	mux.Handle("/v1/logs", control.requireAuth(http.HandlerFunc(control.handleLogs)))
+	mux.Handle("/v1/logs/stream", control.requireAuth(http.HandlerFunc(control.handleLogsStream)))
 	mux.Handle("/v1/metrics", control.requireAuth(http.HandlerFunc(control.handleMetrics)))
+	mux.Handle("/v1/stats", control.requireAuth(http.HandlerFunc(control.handleStats)))
 	mux.Handle("/v1/config/check", control.requireAuth(http.HandlerFunc(control.handleConfigCheck)))
 	mux.Handle("/v1/config/format", control.requireAuth(http.HandlerFunc(control.handleConfigFormat)))
 	mux.Handle("/v1/runtime/stop", control.requireAuth(http.HandlerFunc(control.handleStop)))
@@ -169,10 +184,7 @@ func (s *controlServer) readyInfo(build BuildInfo) readyInfo {
 func (s *controlServer) requireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !s.authorized(r.Header.Get("Authorization")) {
-			writeControlJSON(w, http.StatusUnauthorized, map[string]any{
-				"ok":    false,
-				"error": "unauthorized",
-			})
+			writeControlError(w, http.StatusUnauthorized, "auth.unauthorized", "unauthorized", "")
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -189,19 +201,21 @@ func (s *controlServer) authorized(header string) bool {
 
 func (s *controlServer) handleVersion(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	writeControlJSON(w, http.StatusOK, map[string]any{
-		"version": s.engine.options.Build.Version,
-		"commit":  s.engine.options.Build.Commit,
-		"build":   s.engine.options.Build.Date,
+		"version":             s.engine.options.Build.Version,
+		"commit":              s.engine.options.Build.Commit,
+		"build":               s.engine.options.Build.Date,
+		"control_api_version": controlAPIVersion,
+		"capabilities":        controlCapabilities,
 	})
 }
 
 func (s *controlServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	writeControlJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -209,7 +223,7 @@ func (s *controlServer) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 func (s *controlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	writeControlJSON(w, http.StatusOK, s.engine.Status())
@@ -217,7 +231,7 @@ func (s *controlServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *controlServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	limit := 100
@@ -229,27 +243,87 @@ func (s *controlServer) handleLogs(w http.ResponseWriter, r *http.Request) {
 	writeControlJSON(w, http.StatusOK, map[string]any{"entries": s.engine.logs.Entries(limit)})
 }
 
+func (s *controlServer) handleLogsStream(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeControlError(w, http.StatusInternalServerError, "stream.unsupported", "streaming is not supported", "")
+		return
+	}
+	cursor := uint64(0)
+	if raw := r.URL.Query().Get("after"); raw != "" {
+		if parsed, err := strconv.ParseUint(raw, 10, 64); err == nil {
+			cursor = parsed
+		}
+	}
+	limit := 200
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		if parsed, err := strconv.Atoi(raw); err == nil && parsed > 0 && parsed <= 1000 {
+			limit = parsed
+		}
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	sendEntries := func() {
+		for _, entry := range s.engine.logs.EntriesSince(cursor, limit) {
+			cursor = entry.ID
+			data, err := json.Marshal(entry)
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "id: %d\nevent: log\ndata: %s\n\n", entry.ID, data)
+		}
+		flusher.Flush()
+	}
+	sendEntries()
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			sendEntries()
+			_, _ = fmt.Fprint(w, ": heartbeat\n\n")
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *controlServer) handleMetrics(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	w.Header().Set("Content-Type", "text/plain; version=0.0.4")
 	writeMetrics(w)
 }
 
+func (s *controlServer) handleStats(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
+		return
+	}
+	writeControlJSON(w, http.StatusOK, s.engine.Stats())
+}
+
 func (s *controlServer) handleConfigCheck(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeControlJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		writeControlError(w, http.StatusBadRequest, "config.read_failed", err.Error(), "")
 		return
 	}
 	if err := CheckConfigJSON(raw); err != nil {
-		writeControlJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		writeControlError(w, http.StatusBadRequest, "config.invalid", err.Error(), "")
 		return
 	}
 	writeControlJSON(w, http.StatusOK, map[string]any{"ok": true})
@@ -257,17 +331,17 @@ func (s *controlServer) handleConfigCheck(w http.ResponseWriter, r *http.Request
 
 func (s *controlServer) handleConfigFormat(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	raw, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
-		writeControlJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		writeControlError(w, http.StatusBadRequest, "config.read_failed", err.Error(), "")
 		return
 	}
 	formatted, err := FormatConfigJSON(raw)
 	if err != nil {
-		writeControlJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
+		writeControlError(w, http.StatusBadRequest, "config.invalid", err.Error(), "")
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -276,7 +350,7 @@ func (s *controlServer) handleConfigFormat(w http.ResponseWriter, r *http.Reques
 
 func (s *controlServer) handleStop(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		writeControlJSON(w, http.StatusMethodNotAllowed, map[string]any{"ok": false, "error": "method not allowed"})
+		writeControlError(w, http.StatusMethodNotAllowed, "http.method_not_allowed", "method not allowed", "")
 		return
 	}
 	writeControlJSON(w, http.StatusOK, map[string]any{"ok": true, "stopping": true})
@@ -285,6 +359,23 @@ func (s *controlServer) handleStop(w http.ResponseWriter, r *http.Request) {
 		defer cancel()
 		_ = s.engine.Close(ctx)
 	}()
+}
+
+type controlError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Field   string `json:"field,omitempty"`
+}
+
+func writeControlError(w http.ResponseWriter, status int, code, message, field string) {
+	writeControlJSON(w, status, map[string]any{
+		"ok": false,
+		"error": controlError{
+			Code:    code,
+			Message: message,
+			Field:   field,
+		},
+	})
 }
 
 func writeControlJSON(w http.ResponseWriter, status int, payload any) {

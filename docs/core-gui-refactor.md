@@ -267,18 +267,35 @@ Ready file：
 
 ## 最小控制 API
 
-第一阶段只做这些：
+第一阶段实现这些：
 
 ```text
 GET  /v1/version
 GET  /v1/health
 GET  /v1/status
 GET  /v1/logs
+GET  /v1/logs/stream
 GET  /v1/metrics
+GET  /v1/stats
 POST /v1/config/check
 POST /v1/config/format
 POST /v1/runtime/stop
 ```
+
+`/v1/version` 返回 build metadata、`control_api_version` 和 capabilities。错误响应使用稳定 JSON shape：
+
+```json
+{
+  "ok": false,
+  "error": {
+    "code": "config.invalid",
+    "message": "配置无效",
+    "field": "listen"
+  }
+}
+```
+
+`/v1/logs/stream` 使用 SSE 输出 bounded log ring entries。`/v1/stats` 返回 UI dashboard 需要的 JSON counters、traffic、listeners 和 client/server 状态。
 
 先不做：
 
@@ -286,12 +303,11 @@ POST /v1/runtime/stop
 POST /v1/config/reload
 POST /v1/config/reload-plan
 GET  /v1/events/stream
-GET  /v1/logs/stream
 ```
 
 理由：
 
-- GUI 第一版可以用轮询 `status` + `logs`，不需要马上做 SSE/WebSocket 日志流。
+- GUI 第一版已经可以用轮询 `status` + `logs`；SSE log stream 只作为更顺滑日志面板的可选能力。
 - profile 切换可以重启 sidecar，暂不需要 reload。
 - 如果一开始把 reload 做进 API，就会被迫处理 listener handoff、TLS 证书替换、ECH 刷新、连接池缩放、token 替换等高风险路径。
 

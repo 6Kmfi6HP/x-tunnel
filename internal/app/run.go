@@ -4,6 +4,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -27,6 +28,9 @@ func RunCLI(parent context.Context) int {
 	if showVersion {
 		fmt.Println(versionString())
 		return 0
+	}
+	if checkConfigFile != "" || formatConfigFile != "" {
+		return runOfflineConfigCommand()
 	}
 	if configFile == "" && listenAddr == "" {
 		flag.Usage()
@@ -63,4 +67,50 @@ func RunCLI(parent context.Context) int {
 		return 4
 	}
 	return 0
+}
+
+func runOfflineConfigCommand() int {
+	if checkConfigFile != "" && formatConfigFile != "" {
+		log.Printf("[配置] -check-config 和 -format-config 不能同时使用")
+		return 2
+	}
+	path := checkConfigFile
+	format := false
+	if formatConfigFile != "" {
+		path = formatConfigFile
+		format = true
+	}
+	raw, err := readConfigCommandInput(path)
+	if err != nil {
+		log.Printf("[配置] %v", err)
+		return 2
+	}
+	if format {
+		formatted, err := FormatConfigJSON(raw)
+		if err != nil {
+			log.Printf("[配置] %v", err)
+			return 2
+		}
+		if _, err := os.Stdout.Write(formatted); err != nil {
+			log.Printf("[配置] 写入 stdout 失败: %v", err)
+			return 2
+		}
+		return 0
+	}
+	if err := CheckConfigJSON(raw); err != nil {
+		log.Printf("[配置] %v", err)
+		return 2
+	}
+	fmt.Println(`{"ok":true}`)
+	return 0
+}
+
+func readConfigCommandInput(path string) ([]byte, error) {
+	if strings.TrimSpace(path) == "" {
+		return nil, fmt.Errorf("配置文件路径不能为空")
+	}
+	if path == "-" {
+		return io.ReadAll(io.LimitReader(os.Stdin, 1<<20))
+	}
+	return os.ReadFile(path)
 }

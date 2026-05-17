@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,7 +54,11 @@ func buildIntegrationBinary(t *testing.T, ctx context.Context) string {
 		if integrationBuildErr != nil {
 			return
 		}
-		integrationBuildPath = filepath.Join(integrationBuildDir, "x-tunnel")
+		name := "x-tunnel"
+		if runtime.GOOS == "windows" {
+			name += ".exe"
+		}
+		integrationBuildPath = filepath.Join(integrationBuildDir, name)
 		build := exec.CommandContext(ctx, "go", "build", "-o", integrationBuildPath, "../../cmd/x-tunnel")
 		integrationBuildOutput, integrationBuildErr = build.CombinedOutput()
 	})
