@@ -19,6 +19,7 @@ MAX_CLIENTS="${XTUNNEL_MAX_CLIENTS:-0}"
 MAX_STREAMS="${XTUNNEL_MAX_STREAMS:-0}"
 INSTALL_DIR="${XTUNNEL_INSTALL_DIR:-/usr/local/bin}"
 CONFIG_DIR="${XTUNNEL_CONFIG_DIR:-/etc/x-tunnel}"
+META_FILE="${XTUNNEL_META_FILE:-}"
 SERVICE_NAME="${XTUNNEL_SERVICE_NAME:-x-tunnel}"
 BINARY_URL="${XTUNNEL_BINARY_URL:-}"
 PUBLIC_HOST="${XTUNNEL_PUBLIC_HOST:-}"
@@ -31,6 +32,7 @@ CLIENT_METRICS="${XTUNNEL_CLIENT_METRICS:-127.0.0.1:11082}"
 NON_INTERACTIVE="${XTUNNEL_NON_INTERACTIVE:-false}"
 SKIP_START="${XTUNNEL_SKIP_START:-false}"
 PRINT_ONLY="${XTUNNEL_PRINT_ONLY:-false}"
+SHOW_CONFIG="${XTUNNEL_SHOW_CONFIG:-false}"
 
 usage() {
   cat <<'EOF'
@@ -61,6 +63,7 @@ Options:
   --max-clients N          Server max client sessions. Default: 0.
   --max-streams N          Server max streams per client. Default: 0.
   --client-listen VALUE    Client listen string for generated config.
+  --show-config            Read the installed server state and print client configs.
   --skip-start             Install files but do not start/restart services.
   --print-only             Print resolved config without installing.
   -h, --help               Show this help.
@@ -97,6 +100,64 @@ json_escape() {
     gsub(/\n/,"\\n",s)
     printf "%s", s
   }' "$1"
+}
+
+json_get_string() {
+  file="$1"
+  key="$2"
+  awk -v key="$key" '
+    index($0, "\"" key "\"") {
+      line = $0
+      sub("^[^\"]*\"" key "\"[ \t]*:[ \t]*\"", "", line)
+      out = ""
+      escaped = 0
+      for (i = 1; i <= length(line); i++) {
+        ch = substr(line, i, 1)
+        if (escaped) {
+          if (ch == "n") out = out "\n"
+          else if (ch == "r") out = out "\r"
+          else if (ch == "t") out = out "\t"
+          else out = out ch
+          escaped = 0
+          continue
+        }
+        if (ch == "\\") {
+          escaped = 1
+          continue
+        }
+        if (ch == "\"") {
+          print out
+          exit
+        }
+        out = out ch
+      }
+    }
+  ' "$file"
+}
+
+json_get_raw() {
+  file="$1"
+  key="$2"
+  awk -v key="$key" '
+    index($0, "\"" key "\"") {
+      line = $0
+      sub("^.*\"" key "\"[ \t]*:[ \t]*", "", line)
+      sub(",[ \t]*$", "", line)
+      gsub(/^[ \t]+|[ \t]+$/, "", line)
+      print line
+      exit
+    }
+  ' "$file"
+}
+
+value_or_default() {
+  value="$1"
+  default_value="$2"
+  if [ -n "$value" ]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$default_value"
+  fi
 }
 
 need_cmd() {
@@ -367,6 +428,86 @@ wait_cloudflared_url() {
   return 1
 }
 
+latest_cloudflared_url() {
+  service="$1"
+  journalctl -u "$service" -n 200 --no-pager 2>/dev/null | grep -oE 'https://[^ ]+\.trycloudflare\.com' | tail -1 || true
+}
+
+write_install_metadata() {
+  file="${META_FILE:-${CONFIG_DIR}/install.json}"
+  tmp="${file}.tmp"
+  cloudflared_service="${SERVICE_NAME}-cloudflared.service"
+  {
+    printf '{\n'
+    printf '  "mode": "%s",\n' "$(json_escape "$MODE")"
+    printf '  "service_name": "%s",\n' "$(json_escape "$SERVICE_NAME")"
+    printf '  "cloudflared_service": "%s",\n' "$(json_escape "$cloudflared_service")"
+    printf '  "install_dir": "%s",\n' "$(json_escape "$INSTALL_DIR")"
+    printf '  "config_dir": "%s",\n' "$(json_escape "$CONFIG_DIR")"
+    printf '  "server_config": "%s",\n' "$(json_escape "${CONFIG_DIR}/server.json")"
+    printf '  "listen_host": "%s",\n' "$(json_escape "$LISTEN_HOST")"
+    printf '  "listen_port": "%s",\n' "$(json_escape "$LISTEN_PORT")"
+    printf '  "path": "%s",\n' "$(json_escape "$TUNNEL_PATH")"
+    printf '  "public_host": "%s",\n' "$(json_escape "$PUBLIC_HOST")"
+    printf '  "server_listen": "%s",\n' "$(json_escape "$SERVER_LISTEN")"
+    printf '  "metrics": "%s",\n' "$(json_escape "$METRICS")"
+    printf '  "client_listen": "%s",\n' "$(json_escape "$CLIENT_LISTEN")"
+    printf '  "client_connections": %s,\n' "$CLIENT_CONNECTIONS"
+    printf '  "client_fallback": %s,\n' "$CLIENT_FALLBACK"
+    printf '  "client_insecure": %s,\n' "$CLIENT_INSECURE"
+    printf '  "client_metrics": "%s"\n' "$(json_escape "$CLIENT_METRICS")"
+    printf '}\n'
+  } >"$tmp"
+  install -m 0600 "$tmp" "$file"
+  rm -f "$tmp"
+}
+
+show_installed_config() {
+  meta="${META_FILE:-${CONFIG_DIR}/install.json}"
+  server_config="${CONFIG_DIR}/server.json"
+  [ -r "$meta" ] || die "cannot read install metadata: $meta"
+  [ -r "$server_config" ] || die "cannot read server config: $server_config"
+
+  MODE="$(value_or_default "$(json_get_string "$meta" mode)" "$MODE")"
+  SERVICE_NAME="$(value_or_default "$(json_get_string "$meta" service_name)" "$SERVICE_NAME")"
+  TUNNEL_PATH="$(value_or_default "$(json_get_string "$meta" path)" "$TUNNEL_PATH")"
+  LISTEN_PORT="$(value_or_default "$(json_get_string "$meta" listen_port)" "$LISTEN_PORT")"
+  PUBLIC_HOST="$(value_or_default "$(json_get_string "$meta" public_host)" "$PUBLIC_HOST")"
+  SERVER_LISTEN="$(value_or_default "$(json_get_string "$meta" server_listen)" "$(json_get_string "$server_config" listen)")"
+  METRICS="$(value_or_default "$(json_get_string "$server_config" metrics)" "$(json_get_string "$meta" metrics)")"
+  CLIENT_LISTEN="$(value_or_default "$(json_get_string "$meta" client_listen)" "$CLIENT_LISTEN")"
+  CLIENT_METRICS="$(value_or_default "$(json_get_string "$meta" client_metrics)" "$CLIENT_METRICS")"
+  CLIENT_CONNECTIONS="$(value_or_default "$(json_get_raw "$meta" client_connections)" "$CLIENT_CONNECTIONS")"
+  CLIENT_FALLBACK="$(value_or_default "$(json_get_raw "$meta" client_fallback)" "$CLIENT_FALLBACK")"
+  CLIENT_INSECURE="$(value_or_default "$(json_get_raw "$meta" client_insecure)" "$CLIENT_INSECURE")"
+  TOKEN="$(json_get_string "$server_config" token)"
+  [ -n "$TOKEN" ] || die "server token is missing in $server_config"
+  SUMMARY_TITLE="x-tunnel client config"
+
+  case "$MODE" in
+    cloudflared)
+      cloudflared_service="$(value_or_default "$(json_get_string "$meta" cloudflared_service)" "${SERVICE_NAME}-cloudflared.service")"
+      cloud_url="$(latest_cloudflared_url "$cloudflared_service")"
+      [ -n "$cloud_url" ] || die "cannot find a trycloudflare.com URL in journalctl for $cloudflared_service"
+      CLIENT_FORWARD="${cloud_url}${TUNNEL_PATH}"
+      CLIENT_FORWARD="wss://${CLIENT_FORWARD#https://}"
+      ;;
+    direct)
+      if [ -z "$PUBLIC_HOST" ]; then
+        PUBLIC_HOST="$(detect_public_host 2>/dev/null || true)"
+      fi
+      [ -n "$PUBLIC_HOST" ] || die "direct mode needs public_host in $meta or public IP detection"
+      CLIENT_FORWARD="ws://${PUBLIC_HOST}:${LISTEN_PORT}${TUNNEL_PATH}"
+      cloud_url=""
+      ;;
+    *)
+      die "unknown installed mode: $MODE"
+      ;;
+  esac
+
+  print_summary "$CLIENT_FORWARD" "$cloud_url"
+}
+
 install_binary() {
   mkdir -p "$INSTALL_DIR"
   tmp="$(mktemp)"
@@ -383,11 +524,256 @@ install_binary() {
   rm -f "$tmp"
 }
 
+install_x_command() {
+  mkdir -p "$INSTALL_DIR"
+  out="${INSTALL_DIR}/x"
+  tmp="$(mktemp)"
+  cat >"$tmp" <<'EOF'
+#!/usr/bin/env sh
+set -eu
+
+CONFIG_DIR="${XTUNNEL_CONFIG_DIR:-/etc/x-tunnel}"
+META_FILE="${XTUNNEL_META_FILE:-${CONFIG_DIR}/install.json}"
+SERVER_CONFIG="${CONFIG_DIR}/server.json"
+
+if [ "$(id -u)" -ne 0 ] && { [ ! -r "$META_FILE" ] || [ ! -r "$SERVER_CONFIG" ]; }; then
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    exec sudo "$0" "$@"
+  fi
+fi
+
+die() {
+  printf 'error: %s\n' "$*" >&2
+  exit 1
+}
+
+json_escape() {
+  awk 'BEGIN {
+    s = ARGV[1]
+    ARGV[1] = ""
+    gsub(/\\/,"\\\\",s)
+    gsub(/"/,"\\\"",s)
+    gsub(/\t/,"\\t",s)
+    gsub(/\r/,"\\r",s)
+    gsub(/\n/,"\\n",s)
+    printf "%s", s
+  }' "$1"
+}
+
+json_get_string() {
+  file="$1"
+  key="$2"
+  awk -v key="$key" '
+    index($0, "\"" key "\"") {
+      line = $0
+      sub("^[^\"]*\"" key "\"[ \t]*:[ \t]*\"", "", line)
+      out = ""
+      escaped = 0
+      for (i = 1; i <= length(line); i++) {
+        ch = substr(line, i, 1)
+        if (escaped) {
+          if (ch == "n") out = out "\n"
+          else if (ch == "r") out = out "\r"
+          else if (ch == "t") out = out "\t"
+          else out = out ch
+          escaped = 0
+          continue
+        }
+        if (ch == "\\") {
+          escaped = 1
+          continue
+        }
+        if (ch == "\"") {
+          print out
+          exit
+        }
+        out = out ch
+      }
+    }
+  ' "$file"
+}
+
+json_get_raw() {
+  file="$1"
+  key="$2"
+  awk -v key="$key" '
+    index($0, "\"" key "\"") {
+      line = $0
+      sub("^.*\"" key "\"[ \t]*:[ \t]*", "", line)
+      sub(",[ \t]*$", "", line)
+      gsub(/^[ \t]+|[ \t]+$/, "", line)
+      print line
+      exit
+    }
+  ' "$file"
+}
+
+value_or_default() {
+  value="$1"
+  default_value="$2"
+  if [ -n "$value" ]; then
+    printf '%s' "$value"
+  else
+    printf '%s' "$default_value"
+  fi
+}
+
+http_get() {
+  url="$1"
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsSL "$url"
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- "$url"
+  else
+    return 1
+  fi
+}
+
+detect_public_host() {
+  for url in https://api.ipify.org https://ifconfig.me; do
+    host="$(http_get "$url" 2>/dev/null | tr -d '[:space:]' || true)"
+    if [ -n "$host" ]; then
+      printf '%s' "$host"
+      return 0
+    fi
+  done
+  return 1
+}
+
+latest_cloudflared_url() {
+  service="$1"
+  journalctl -u "$service" -n 200 --no-pager 2>/dev/null | grep -oE 'https://[^ ]+\.trycloudflare\.com' | tail -1 || true
+}
+
+write_client_config() {
+  forward="$1"
+  include_front="$2"
+  {
+    printf '{\n'
+    printf '  "listen": "%s",\n' "$(json_escape "$CLIENT_LISTEN")"
+    printf '  "forward": "%s",\n' "$(json_escape "$forward")"
+    printf '  "token": "%s",\n' "$(json_escape "$TOKEN")"
+    printf '  "connections": %s,\n' "$CLIENT_CONNECTIONS"
+    printf '  "fallback": %s,\n' "$CLIENT_FALLBACK"
+    printf '  "insecure": %s,\n' "$CLIENT_INSECURE"
+    printf '  "metrics": "%s",\n' "$(json_escape "$CLIENT_METRICS")"
+    printf '  "dial_timeout": "3s",\n'
+    printf '  "ws_handshake_timeout": "5s",\n'
+    printf '  "reconnect_delay": "1s",\n'
+    printf '  "reconnect_max_delay": "10s",\n'
+    printf '  "reconnect_jitter": "250ms",\n'
+    printf '  "rtt_timeout": "2s"'
+    if [ "$include_front" = "true" ]; then
+      printf ',\n'
+      printf '  "websocket_front_proxy": {\n'
+      printf '    "enabled": true,\n'
+      printf '    "type": "http_connect",\n'
+      printf '    "server": "cloudnproxy.baidu.com:443",\n'
+      printf '    "connect_host": "sptest.baidu.com",\n'
+      printf '    "headers": {\n'
+      printf '      "X-T5-Auth": "482857715",\n'
+      printf '      "User-Agent": "okhttp/3.11.0 Dalvik/2.1.0 (Linux; Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)",\n'
+      printf '      "Proxy-Connection": "keep-alive",\n'
+      printf '      "Connection": "keep-alive"\n'
+      printf '    }\n'
+      printf '  }\n'
+    else
+      printf '\n'
+    fi
+    printf '}\n'
+  }
+}
+
+show_config() {
+  [ -r "$META_FILE" ] || die "cannot read install metadata: $META_FILE"
+  [ -r "$SERVER_CONFIG" ] || die "cannot read server config: $SERVER_CONFIG"
+
+  MODE="$(value_or_default "$(json_get_string "$META_FILE" mode)" cloudflared)"
+  SERVICE_NAME="$(value_or_default "$(json_get_string "$META_FILE" service_name)" x-tunnel)"
+  TUNNEL_PATH="$(value_or_default "$(json_get_string "$META_FILE" path)" /tunnel)"
+  LISTEN_PORT="$(value_or_default "$(json_get_string "$META_FILE" listen_port)" 18080)"
+  PUBLIC_HOST="$(value_or_default "$(json_get_string "$META_FILE" public_host)" "")"
+  SERVER_LISTEN="$(value_or_default "$(json_get_string "$META_FILE" server_listen)" "$(json_get_string "$SERVER_CONFIG" listen)")"
+  METRICS="$(value_or_default "$(json_get_string "$SERVER_CONFIG" metrics)" "$(json_get_string "$META_FILE" metrics)")"
+  CLIENT_LISTEN="$(value_or_default "$(json_get_string "$META_FILE" client_listen)" "socks5://127.0.0.1:11080,http://127.0.0.1:11081")"
+  CLIENT_METRICS="$(value_or_default "$(json_get_string "$META_FILE" client_metrics)" "127.0.0.1:11082")"
+  CLIENT_CONNECTIONS="$(value_or_default "$(json_get_raw "$META_FILE" client_connections)" 1)"
+  CLIENT_FALLBACK="$(value_or_default "$(json_get_raw "$META_FILE" client_fallback)" true)"
+  CLIENT_INSECURE="$(value_or_default "$(json_get_raw "$META_FILE" client_insecure)" false)"
+  TOKEN="$(json_get_string "$SERVER_CONFIG" token)"
+  [ -n "$TOKEN" ] || die "server token is missing in $SERVER_CONFIG"
+
+  case "$MODE" in
+    cloudflared)
+      cloudflared_service="$(value_or_default "$(json_get_string "$META_FILE" cloudflared_service)" "${SERVICE_NAME}-cloudflared.service")"
+      cloud_url="$(latest_cloudflared_url "$cloudflared_service")"
+      [ -n "$cloud_url" ] || die "cannot find a trycloudflare.com URL in journalctl for $cloudflared_service"
+      CLIENT_FORWARD="${cloud_url}${TUNNEL_PATH}"
+      CLIENT_FORWARD="wss://${CLIENT_FORWARD#https://}"
+      ;;
+    direct)
+      if [ -z "$PUBLIC_HOST" ]; then
+        PUBLIC_HOST="$(detect_public_host 2>/dev/null || true)"
+      fi
+      [ -n "$PUBLIC_HOST" ] || die "direct mode needs public_host in $META_FILE or public IP detection"
+      CLIENT_FORWARD="ws://${PUBLIC_HOST}:${LISTEN_PORT}${TUNNEL_PATH}"
+      cloud_url=""
+      ;;
+    *)
+      die "unknown installed mode: $MODE"
+      ;;
+  esac
+
+  printf 'x-tunnel client config\n' >&2
+  printf '  mode: %s\n' "$MODE" >&2
+  printf '  service: %s.service\n' "$SERVICE_NAME" >&2
+  printf '  config: %s\n' "$SERVER_CONFIG" >&2
+  printf '  listen: %s\n' "$SERVER_LISTEN" >&2
+  printf '  metrics: %s\n' "$METRICS" >&2
+  if [ "$MODE" = "cloudflared" ]; then
+    printf '  cloudflared url: %s\n' "$cloud_url" >&2
+  fi
+  printf '  client forward: %s\n' "$CLIENT_FORWARD" >&2
+  printf '\n' >&2
+  printf '%s\n' '--- client config ---'
+  write_client_config "$CLIENT_FORWARD" false
+  printf '%s\n' '--- client config with websocket_front_proxy ---'
+  write_client_config "$CLIENT_FORWARD" true
+}
+
+case "${1:-show-config}" in
+  show-config|config|client-config)
+    show_config
+    ;;
+  -h|--help|help)
+    cat <<'HELP'
+Usage:
+  x
+  x config
+  x show-config
+
+Print the installed x-tunnel client connection configs.
+HELP
+    ;;
+  *)
+    die "unknown command: $1"
+    ;;
+esac
+EOF
+  if [ -e "$out" ] && ! grep -q "Print the installed x-tunnel client connection configs" "$out" 2>/dev/null; then
+    backup="${out}.bak-$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$out" "$backup"
+    log "backed up existing $out to $backup"
+  fi
+  install -m 0755 "$tmp" "$out"
+  rm -f "$tmp"
+}
+
 print_summary() {
   forward="$1"
   cloud_url="$2"
   log ""
-  log "x-tunnel server installed"
+  log "${SUMMARY_TITLE:-x-tunnel server installed}"
   log "  mode: $MODE"
   log "  service: ${SERVICE_NAME}.service"
   log "  binary: ${INSTALL_DIR}/x-tunnel"
@@ -434,12 +820,18 @@ while [ "$#" -gt 0 ]; do
     --client-fallback) CLIENT_FALLBACK="$2"; shift 2 ;;
     --client-insecure) CLIENT_INSECURE="$2"; shift 2 ;;
     --client-metrics) CLIENT_METRICS="$2"; shift 2 ;;
+    --show-config) SHOW_CONFIG=true; shift ;;
     --skip-start) SKIP_START=true; shift ;;
     --print-only) PRINT_ONLY=true; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1" ;;
   esac
 done
+
+if is_true "$SHOW_CONFIG"; then
+  show_installed_config
+  exit 0
+fi
 
 interactive_prompts
 
@@ -490,7 +882,9 @@ need_cmd sed
 mkdir -p "$CONFIG_DIR"
 install_binary
 write_server_config "${CONFIG_DIR}/server.json" "$SERVER_LISTEN"
+write_install_metadata
 write_systemd_service
+install_x_command
 
 if [ "$MODE" = "cloudflared" ]; then
   install_cloudflared

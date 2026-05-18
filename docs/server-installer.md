@@ -36,7 +36,9 @@ curl -fsSL https://raw.githubusercontent.com/6Kmfi6HP/x-tunnel/main/scripts/inst
 This creates:
 
 - `/usr/local/bin/x-tunnel`
+- `/usr/local/bin/x`
 - `/etc/x-tunnel/server.json`
+- `/etc/x-tunnel/install.json`
 - `/etc/systemd/system/x-tunnel.service`
 - `/etc/systemd/system/x-tunnel-cloudflared.service`
 
@@ -65,6 +67,33 @@ ws://203.0.113.10:18080/tunnel
 
 Open the selected TCP port in the cloud firewall and host firewall before using
 direct mode from another machine.
+
+## Show Installed Client Configs
+
+After installation, use the registered `x` command to print the current client
+connection configs:
+
+```bash
+x
+```
+
+Equivalent commands:
+
+```bash
+x config
+x show-config
+```
+
+The command reads `/etc/x-tunnel/install.json` for installation metadata and
+`/etc/x-tunnel/server.json` for the token. In `cloudflared` mode it reads the
+latest `trycloudflare.com` URL from `journalctl`, so it reflects the current
+temporary tunnel URL after service restarts.
+
+If you still have the installer script locally, this is equivalent:
+
+```bash
+sudo ./scripts/install/server.sh --show-config
+```
 
 ## Server egress proxy and target policy
 
