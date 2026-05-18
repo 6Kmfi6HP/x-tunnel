@@ -28,11 +28,6 @@ CLIENT_CONNECTIONS="${XTUNNEL_CLIENT_CONNECTIONS:-1}"
 CLIENT_FALLBACK="${XTUNNEL_CLIENT_FALLBACK:-true}"
 CLIENT_INSECURE="${XTUNNEL_CLIENT_INSECURE:-false}"
 CLIENT_METRICS="${XTUNNEL_CLIENT_METRICS:-127.0.0.1:11082}"
-FRONT_PROXY="${XTUNNEL_FRONT_PROXY:-false}"
-FRONT_PROXY_SERVER="${XTUNNEL_FRONT_PROXY_SERVER:-cloudnproxy.baidu.com:443}"
-FRONT_PROXY_CONNECT_HOST="${XTUNNEL_FRONT_PROXY_CONNECT_HOST:-sptest.baidu.com}"
-FRONT_PROXY_AUTH="${XTUNNEL_FRONT_PROXY_AUTH:-}"
-FRONT_PROXY_USER_AGENT="${XTUNNEL_FRONT_PROXY_USER_AGENT:-okhttp/3.11.0 Dalvik/2.1.0 (Linux; Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)}"
 NON_INTERACTIVE="${XTUNNEL_NON_INTERACTIVE:-false}"
 SKIP_START="${XTUNNEL_SKIP_START:-false}"
 PRINT_ONLY="${XTUNNEL_PRINT_ONLY:-false}"
@@ -66,10 +61,6 @@ Options:
   --max-clients N          Server max client sessions. Default: 0.
   --max-streams N          Server max streams per client. Default: 0.
   --client-listen VALUE    Client listen string for generated config.
-  --front-proxy            Include websocket_front_proxy in generated client config.
-  --front-proxy-server HP  Front proxy server host:port. Default: cloudnproxy.baidu.com:443.
-  --front-proxy-host HOST  CONNECT Host header value. Default: sptest.baidu.com.
-  --front-proxy-auth VAL   X-T5-Auth value for Baidu-style front proxy config.
   --skip-start             Install files but do not start/restart services.
   --print-only             Print resolved config without installing.
   -h, --help               Show this help.
@@ -280,13 +271,11 @@ write_client_config() {
       printf '  "websocket_front_proxy": {\n'
       printf '    "enabled": true,\n'
       printf '    "type": "http_connect",\n'
-      printf '    "server": "%s",\n' "$(json_escape "$FRONT_PROXY_SERVER")"
-      printf '    "connect_host": "%s",\n' "$(json_escape "$FRONT_PROXY_CONNECT_HOST")"
+      printf '    "server": "cloudnproxy.baidu.com:443",\n'
+      printf '    "connect_host": "sptest.baidu.com",\n'
       printf '    "headers": {\n'
-      if [ -n "$FRONT_PROXY_AUTH" ]; then
-        printf '      "X-T5-Auth": "%s",\n' "$(json_escape "$FRONT_PROXY_AUTH")"
-      fi
-      printf '      "User-Agent": "%s",\n' "$(json_escape "$FRONT_PROXY_USER_AGENT")"
+      printf '      "X-T5-Auth": "replace-with-auth-token",\n'
+      printf '      "User-Agent": "okhttp/3.11.0 Dalvik/2.1.0 (Linux; Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)",\n'
       printf '      "Proxy-Connection": "keep-alive",\n'
       printf '      "Connection": "keep-alive"\n'
       printf '    }\n'
@@ -413,11 +402,7 @@ print_summary() {
   log ""
   printf '%s\n' '--- client config ---'
   write_client_config "$forward" false
-  if is_true "$FRONT_PROXY"; then
-    printf '%s\n' '--- client config with websocket_front_proxy (selected) ---'
-  else
-    printf '%s\n' '--- client config with websocket_front_proxy ---'
-  fi
+  printf '%s\n' '--- client config with websocket_front_proxy ---'
   write_client_config "$forward" true
 }
 
@@ -449,11 +434,6 @@ while [ "$#" -gt 0 ]; do
     --client-fallback) CLIENT_FALLBACK="$2"; shift 2 ;;
     --client-insecure) CLIENT_INSECURE="$2"; shift 2 ;;
     --client-metrics) CLIENT_METRICS="$2"; shift 2 ;;
-    --front-proxy) FRONT_PROXY=true; shift ;;
-    --front-proxy-server) FRONT_PROXY_SERVER="$2"; shift 2 ;;
-    --front-proxy-host) FRONT_PROXY_CONNECT_HOST="$2"; shift 2 ;;
-    --front-proxy-auth) FRONT_PROXY_AUTH="$2"; shift 2 ;;
-    --front-proxy-user-agent) FRONT_PROXY_USER_AGENT="$2"; shift 2 ;;
     --skip-start) SKIP_START=true; shift ;;
     --print-only) PRINT_ONLY=true; shift ;;
     -h|--help) usage; exit 0 ;;

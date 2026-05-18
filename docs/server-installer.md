@@ -88,19 +88,15 @@ The installer can configure server-side SOCKS5 egress and target restrictions:
 At the end of a successful install, the script prints:
 
 - a standard client config with SOCKS5 and HTTP proxy listeners;
-- a client config that includes `websocket_front_proxy` for Baidu-style
-  HTTP CONNECT front proxying.
+- a client config that includes the fixed `websocket_front_proxy` block from
+  `examples/baidu-front-proxy-client.json` for Baidu-style HTTP CONNECT front
+  proxying.
 
-To include a Baidu front-proxy auth header in the printed config:
+The installer does not accept front-proxy customization flags. Update the
+printed `X-T5-Auth` placeholder in the client config if your front proxy
+requires a real auth value.
 
-```bash
-./scripts/install/server.sh \
-  --non-interactive \
-  --mode cloudflared \
-  --front-proxy-auth 'replace-with-auth-token'
-```
-
-Relevant client output:
+Fixed front-proxy block:
 
 ```json
 {
@@ -110,7 +106,10 @@ Relevant client output:
     "server": "cloudnproxy.baidu.com:443",
     "connect_host": "sptest.baidu.com",
     "headers": {
-      "X-T5-Auth": "replace-with-auth-token"
+      "X-T5-Auth": "replace-with-auth-token",
+      "User-Agent": "okhttp/3.11.0 Dalvik/2.1.0 (Linux; Build/RKQ1.200826.002) baiduboxapp/11.0.5.12 (Baidu; P1 11)",
+      "Proxy-Connection": "keep-alive",
+      "Connection": "keep-alive"
     }
   }
 }
