@@ -125,6 +125,7 @@ curl http://127.0.0.1:12000/
 ```
 
 See [docs/deployment.md](docs/deployment.md) for v2 token authentication, source filtering, target filtering, and TLS/ECH notes.
+For a Linux one-click server installer with interactive and non-interactive modes, temporary Cloudflare tunnels, direct public listeners, and generated client configs, see [docs/server-installer.md](docs/server-installer.md).
 
 Require client certificates with mTLS:
 
