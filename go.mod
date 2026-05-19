@@ -7,3 +7,5 @@ require (
 	github.com/gorilla/websocket v1.5.3
 	github.com/xtaci/smux v1.5.57
 )
+
+require golang.org/x/crypto v0.41.0

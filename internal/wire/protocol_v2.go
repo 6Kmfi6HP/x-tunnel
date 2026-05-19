@@ -2,13 +2,14 @@ package wire
 
 import (
 	"bytes"
-	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
 	"io"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
 )
 
 const (
@@ -474,8 +475,8 @@ func decodeChannelReject(body []byte) (ChannelReject, error) {
 }
 
 func computeV2AuthProof(token, serverName, path string, init ChannelInit) ([]byte, error) {
-	authKey, err := hkdf.Key(sha256.New, []byte(token), []byte("x-tunnel-v2-auth"), serverName, sha256.Size)
-	if err != nil {
+	authKey := make([]byte, sha256.Size)
+	if _, err := io.ReadFull(hkdf.New(sha256.New, []byte(token), []byte("x-tunnel-v2-auth"), []byte(serverName)), authKey); err != nil {
 		return nil, err
 	}
 	transcript, err := channelInitTranscript(serverName, path, init)
