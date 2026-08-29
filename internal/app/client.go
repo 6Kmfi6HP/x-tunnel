@@ -498,15 +498,6 @@ func startTCPListener(ctx context.Context, rule string) (*runtimeListener, error
 	return listener, nil
 }
 
-func runTCPListener(ctx context.Context, rule string) error {
-	listener, err := startTCPListener(ctx, rule)
-	if err != nil {
-		return err
-	}
-	<-listener.done
-	return nil
-}
-
 func handleLocalTCP(c net.Conn, target string) {
 	stream, _, decision, err := echPool.openTCPStream(target)
 	if err != nil {

@@ -90,15 +90,6 @@ func startSOCKS5Listener(ctx context.Context, addr string) (*runtimeListener, er
 	return listener, nil
 }
 
-func runSOCKS5Listener(ctx context.Context, addr string) error {
-	listener, err := startSOCKS5Listener(ctx, addr)
-	if err != nil {
-		return err
-	}
-	<-listener.done
-	return nil
-}
-
 func handleSOCKS5(c net.Conn, cfgp *ProxyConfig) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(cfg.DialTimeout))

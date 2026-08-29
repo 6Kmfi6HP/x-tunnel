@@ -47,15 +47,6 @@ func startHTTPListener(ctx context.Context, addr string) (*runtimeListener, erro
 	return listener, nil
 }
 
-func runHTTPListener(ctx context.Context, addr string) error {
-	listener, err := startHTTPListener(ctx, addr)
-	if err != nil {
-		return err
-	}
-	<-listener.done
-	return nil
-}
-
 func handleHTTP(c net.Conn, cfgp *ProxyConfig) {
 	defer c.Close()
 	_ = c.SetDeadline(time.Now().Add(cfg.DialTimeout))

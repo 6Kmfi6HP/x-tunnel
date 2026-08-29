@@ -600,29 +600,11 @@ func CurrentProtocolCapabilitiesV2() uint64 { return currentProtocolCapabilities
 
 func RequiredProtocolCapabilitiesV2() uint64 { return requiredProtocolCapabilitiesV2() }
 
-func WriteV2Frame(w io.Writer, frame V2Frame) error { return writeV2Frame(w, frame) }
-
-func ReadV2Frame(r io.Reader, maxSize int) (V2Frame, error) { return readV2Frame(r, maxSize) }
-
-func WriteV2TLV(w io.Writer, typ uint16, value []byte) error {
-	return writeV2TLV(w, typ, value)
-}
-
-func ParseV2TLVs(body []byte, known map[uint16]bool) (map[uint16]V2TLV, error) {
-	return parseV2TLVs(body, known)
-}
-
-func EncodeV2TLVs(records []V2TLV) ([]byte, error) { return encodeV2TLVs(records) }
-
 func WriteChannelInit(w io.Writer, init ChannelInit) error { return writeChannelInit(w, init) }
 
 func ReadChannelInit(r io.Reader, maxSize int) (ChannelInit, error) {
 	return readChannelInit(r, maxSize)
 }
-
-func EncodeChannelInit(init ChannelInit) ([]byte, error) { return encodeChannelInit(init) }
-
-func DecodeChannelInit(body []byte) (ChannelInit, error) { return decodeChannelInit(body) }
 
 func WriteChannelAccept(w io.Writer, accept ChannelAccept) error {
 	return writeChannelAccept(w, accept)
@@ -646,8 +628,4 @@ func VerifyV2AuthProof(token, serverName, path string, init ChannelInit) bool {
 
 func NegotiateProtocolCapabilitiesV2(clientCaps uint64) (uint64, byte, string) {
 	return negotiateProtocolCapabilitiesV2(clientCaps)
-}
-
-func ValidateChannelInitTimestamp(now time.Time, timestamp int64, skew time.Duration) bool {
-	return validateChannelInitTimestamp(now, timestamp, skew)
 }

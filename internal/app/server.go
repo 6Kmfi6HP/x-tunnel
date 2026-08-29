@@ -321,15 +321,6 @@ func startWebSocketServer(ctx context.Context, addr string, allowedNets []*net.I
 	return listener, nil
 }
 
-func runWebSocketServer(ctx context.Context, addr string, allowedNets []*net.IPNet) error {
-	listener, err := startWebSocketServer(ctx, addr, allowedNets, cfg.ShutdownTimeout, nil)
-	if err != nil {
-		return err
-	}
-	<-listener.done
-	return nil
-}
-
 func shutdownHTTPServer(ctx context.Context, server *http.Server, timeout time.Duration) {
 	<-ctx.Done()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)

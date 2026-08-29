@@ -385,20 +385,6 @@ func ReadUDPOpenStatusCode(r io.Reader) (byte, byte, string, error) {
 	return readUDPOpenStatusCode(r)
 }
 
-func WriteOpenStatus(w io.Writer, fieldName string, status byte, message string) error {
-	return writeOpenStatus(w, fieldName, status, message)
-}
-
-func ReadOpenStatus(r io.Reader) (byte, string, error) { return readOpenStatus(r) }
-
-func WriteOpenStatusCode(w io.Writer, fieldName string, status byte, code byte, message string) error {
-	return writeOpenStatusCode(w, fieldName, status, code, message)
-}
-
-func ReadOpenStatusCode(r io.Reader) (byte, byte, string, error) {
-	return readOpenStatusCode(r)
-}
-
 func ReadSmuxOpenHeader(r io.Reader) (byte, byte, string, error) {
 	return readSmuxOpenHeader(r)
 }
@@ -416,10 +402,6 @@ func WriteUDPReply(w io.Writer, addr string, payload []byte) error {
 }
 
 func ReadUDPReply(r io.Reader) (string, []byte, error) { return readUDPReply(r) }
-
-func ValidateProtocolFieldLen(name string, length int) error {
-	return validateProtocolFieldLen(name, length)
-}
 
 func WriteAll(w io.Writer, b []byte) error { return writeAll(w, b) }
 
